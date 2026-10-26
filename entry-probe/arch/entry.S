@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-2.0-only */
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 .section .text.entry,"ax"
 .balign 16
 .global xboot_probe_entry

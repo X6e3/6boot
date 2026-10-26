@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-2.0-only */
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 #include "xboot_boottrace.h"
 
 void xbt_reset(struct xbt_state *s) { *s = (struct xbt_state){.flags=1}; }

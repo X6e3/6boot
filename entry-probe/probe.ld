@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 ENTRY(xboot_probe_entry)
 PHDRS { text PT_LOAD FLAGS(5); data PT_LOAD FLAGS(6); }
 SECTIONS {

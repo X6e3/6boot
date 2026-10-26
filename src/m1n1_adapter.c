@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-2.0-only */
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /* Prototype adapter: reads FDT and existing m1n1 software state. No MMIO,
  * new sysreg access, firmware commands, GPIO operations or allocation. */
 #include "m1n1_adapter.h"

@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: MIT */
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 /*
  * 6boot P3 on the device: load the separately built 6boot entry probe, call it
  * once on the boot CPU and record that it returned.

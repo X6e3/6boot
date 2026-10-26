@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-2.0-only */
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 #ifndef XBOOT_M1N1_ADAPTER_H
 #define XBOOT_M1N1_ADAPTER_H
 #include "types.h"

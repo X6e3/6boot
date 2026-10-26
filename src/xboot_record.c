@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-2.0-only */
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 #include "xboot_record.h"
 _Static_assert(XB_RECORD_BYTES == 160, "Wire ABI size must not silently change");
 

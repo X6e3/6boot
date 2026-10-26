@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-2.0-only */
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 #include "boottrace_adapter.h"
 #include "fb.h"
 #include "uart.h"

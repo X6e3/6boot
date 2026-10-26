@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-2.0-only */
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 #include "xboot.h"
 
 /* Board identity is checked with the apple,j713 FDT compatible by the adapter.

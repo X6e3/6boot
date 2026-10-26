@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
 CC := gcc
 LD := ld
 BUILD ?= /tmp/j713-xboot-p3-entry-20261010

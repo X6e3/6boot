@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: MIT */
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 #ifndef ENTRY_PROBE_H
 #define ENTRY_PROBE_H
 

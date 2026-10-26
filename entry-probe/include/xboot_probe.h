@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: GPL-2.0-only */
+/* SPDX-License-Identifier: GPL-2.0-or-later */
 #ifndef XBOOT_PROBE_H
 #define XBOOT_PROBE_H
 #include <stddef.h>
