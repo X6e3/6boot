@@ -293,7 +293,7 @@ bool payload_logo(void **custom_128, void **custom_256)
 
 int payload_run(void)
 {
-    x6e3_crumb(0);
+    boot_progress(0);
     const char *target = adt_getprop(adt, 0, "target-type", NULL);
     if (target) {
         strcpy(expect_compatible, "apple,");
@@ -317,11 +317,11 @@ int payload_run(void)
         return chainload_load(chainload_spec, chosen, chosen_cnt);
     }
 
-    x6e3_crumb(1);
+    boot_progress(1);
     if (kernel && fdt) {
         if (!xboot_input_ok(fdt)) {
             next_stage.entry = NULL;
-            printf("XBOOT: input profile/FDT rejected before SMP setup\n");
+            printf("6boot: input profile/FDT rejected before SMP setup\n");
             return -1;
         }
         xboot_trace(XBT_CPUFREQ,XBT_BEGIN,XBT_NO_RESULT);
@@ -330,7 +330,7 @@ int payload_run(void)
         xboot_trace(XBT_SMP,XBT_BEGIN,XBT_NO_RESULT);
         smp_start_secondaries();
         xboot_trace(XBT_SMP,XBT_END,XBT_NO_RESULT);
-        x6e3_crumb(2);
+        boot_progress(2);
         xboot_trace(XBT_MITIGATIONS,XBT_BEGIN,XBT_NO_RESULT);
         mitigations_perform();
         xboot_trace(XBT_MITIGATIONS,XBT_END,XBT_NO_RESULT);
@@ -359,7 +359,7 @@ int payload_run(void)
                 printf("Failed to kboot set %s='%s'\n", chosen[i], val);
         }
 
-        x6e3_crumb(3);
+        boot_progress(3);
         xboot_trace(XBT_DT,XBT_BEGIN,XBT_NO_RESULT);
         int dt_result=kboot_prepare_dt(fdt);
         xboot_trace(XBT_DT,XBT_END,dt_result);
@@ -368,7 +368,7 @@ int payload_run(void)
             return -1;
         }
 
-        x6e3_crumb(4);
+        boot_progress(4);
         return kboot_boot(kernel);
     } else if (kernel && !fdt) {
         printf("ERROR: Kernel found but no devicetree for %s available.\n", expect_compatible);

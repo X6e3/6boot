@@ -59,10 +59,10 @@ void xboot_trace(unsigned stage,unsigned kind,int result)
     char line[128];int n;
     /* Raw counter avoids division and invented durations before timer readiness. */
     if(result==XBT_NO_RESULT)
-        n=snprintf(line,sizeof(line),"XBOOT S2 #%03u %s %s tick=%llu%s\r\n",
+        n=snprintf(line,sizeof(line),"6boot S2 #%03u %s %s tick=%llu%s\r\n",
           state.count,xbt_kind_name(kind),xbt_stage_name(stage),(unsigned long long)ticks,timer_ready?"":"(unknown)");
     else
-        n=snprintf(line,sizeof(line),"XBOOT S2 #%03u %s %s ret=%d tick=%llu%s\r\n",
+        n=snprintf(line,sizeof(line),"6boot S2 #%03u %s %s ret=%d tick=%llu%s\r\n",
           state.count,xbt_kind_name(kind),xbt_stage_name(stage),result,(unsigned long long)ticks,timer_ready?"":"(unknown)");
     if(n<0) { publish();return; }
     size_t size=(size_t)n<sizeof(line)?(size_t)n:sizeof(line)-1;

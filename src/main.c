@@ -226,34 +226,34 @@ void m1n1_main(void)
                               next_stage.args[3], next_stage.args[4]);
     xboot_trace(XBT_HANDOFF,XBT_END,vector_allowed ? 0 : -1);
     if (!vector_allowed)
-        panic("XBOOT: refusing unvalidated kernel handoff\n");
+        panic("6boot: refusing unvalidated kernel handoff\n");
 
     printf("Preparing to run next stage at %p...\n", next_stage.entry);
 
     xboot_trace(XBT_NVME_STOP,XBT_BEGIN,XBT_NO_RESULT);
     nvme_shutdown();
     xboot_trace(XBT_NVME_STOP,XBT_END,XBT_NO_RESULT);
-    x6e3_crumb(8);
+    boot_progress(8);
     xboot_trace(XBT_EXCEPTIONS_STOP,XBT_BEGIN,XBT_NO_RESULT);
     exception_shutdown();
     xboot_trace(XBT_EXCEPTIONS_STOP,XBT_END,XBT_NO_RESULT);
-    x6e3_crumb(9);
+    boot_progress(9);
 #ifndef BRINGUP
     xboot_trace(XBT_USB_STOP,XBT_BEGIN,XBT_NO_RESULT);
     usb_iodev_shutdown();
     xboot_trace(XBT_USB_STOP,XBT_END,XBT_NO_RESULT);
-    x6e3_crumb(10);
+    boot_progress(10);
     xboot_trace(XBT_DISPLAY_STOP,XBT_BEGIN,XBT_NO_RESULT);
     display_shutdown(DCP_SLEEP_IF_EXTERNAL);
     xboot_trace(XBT_DISPLAY_STOP,XBT_END,XBT_NO_RESULT);
-    x6e3_crumb(11);
+    boot_progress(11);
 #ifdef USE_FB
     xboot_trace(XBT_OUTPUTS_RELEASE,XBT_POINT,XBT_NO_RESULT);
     xboot_trace_outputs_off();
     xboot_trace(XBT_FB_STOP,XBT_BEGIN,XBT_NO_RESULT);
     fb_shutdown(next_stage.restore_logo);
     xboot_trace(XBT_FB_STOP,XBT_END,XBT_NO_RESULT);
-    x6e3_crumb(12);
+    boot_progress(12);
 #endif
     xboot_trace(XBT_MMU_STOP,XBT_BEGIN,XBT_NO_RESULT);
     xboot_trace_freeze_dt();
@@ -261,7 +261,7 @@ void m1n1_main(void)
 #endif
 
     printf("Vectoring to next stage...\n");
-    x6e3_crumb(13);
+    boot_progress(13);
 
     next_stage.entry(next_stage.args[0], next_stage.args[1], next_stage.args[2], next_stage.args[3],
                      next_stage.args[4]);

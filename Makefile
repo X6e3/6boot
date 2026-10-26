@@ -144,7 +144,7 @@ OBJECTS := \
 	display.o \
 	dockchannel_uart.o \
 	exception.o exception_asm.o \
-	fb.o font.o font_retina.o \
+	fb.o font.o font_retina.o die_256.o \
 	firmware.o \
 	gxf.o gxf_asm.o \
 	heapblock.o \

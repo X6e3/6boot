@@ -42,7 +42,7 @@ static int reject(enum xb_error error)
     /* A broken/missing slot must not replace the original failure cause. */
     if (record_dt)
         publish_record();
-    printf("XBOOT: reject phase=%u first_error=%u events=%lu\n",
+    printf("6boot: reject phase=%u first_error=%u events=%lu\n",
            (unsigned)session.phase, (unsigned)session.error, session.trace_count);
     return -1;
 }
@@ -75,7 +75,7 @@ int xboot_begin_dt(const void *fdt)
                  !fdt_node_check_compatible(fdt, 0, "apple,j713") &&
                  !fdt_node_check_compatible(fdt, 0, "apple,t8132"), 1))
         return reject(session.error);
-    printf("XBOOT: J713 preflight accepted; declared policy MTP-DAPF=Linux DART=inherited-unverified\n");
+    printf("6boot: J713 preflight accepted; declared policy MTP-DAPF=Linux DART=inherited-unverified\n");
     record_meta.chip = chip_id;
     return 0;
 }
@@ -121,7 +121,7 @@ int xboot_dt_prepared(void)
 
 void xboot_dt_failed(int result)
 {
-    printf("XBOOT: DT preparation failed upstream_result=%d\n", result);
+    printf("6boot: DT preparation failed upstream_result=%d\n", result);
     reject(XB_E_DT); /* Preserve an earlier preflight failure, if any. */
 }
 
@@ -277,7 +277,7 @@ int xboot_check_handoff(void *kernel, void *dt, size_t capacity, void *initrd, s
     record_meta.checks++;
     if (publish_record())
         return reject(XB_E_RECORD);
-    printf("XBOOT: handoff metadata checked; CPUs=%lu reservations=%lu\n",
+    printf("6boot: handoff metadata checked; CPUs=%lu reservations=%lu\n",
            facts.cpu_count, facts.reserved_count);
     return 0;
 }
@@ -302,7 +302,7 @@ void xboot_proxy_override(void)
         publish_record();
     record_dt = NULL;
     record_capacity = 0;
-    printf("XBOOT: explicit privileged proxy vector; contract bypassed phase=%u error=%u\n",
+    printf("6boot: explicit privileged proxy vector; contract bypassed phase=%u error=%u\n",
            (unsigned)session.phase, (unsigned)session.error);
     attempted = false;
     armed_kernel = armed_dt = NULL;
@@ -322,6 +322,6 @@ int xboot_vector_allowed(void *kernel, u64 dt, u64 arg1, u64 arg2, u64 arg3, u64
         reject(XB_E_RECORD);
         return 0;
     }
-    printf("XBOOT: branch authorized once; events=%lu\n", session.trace_count);
+    printf("6boot: branch authorized once; events=%lu\n", session.trace_count);
     return 1;
 }

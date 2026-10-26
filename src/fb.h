@@ -45,7 +45,7 @@ void fb_boot_status(const char *line, size_t length, bool failed);
 void fb_blit(u32 x, u32 y, u32 w, u32 h, void *data, u32 stride, pix_fmt_t format);
 void fb_unblit(u32 x, u32 y, u32 w, u32 h, void *data, u32 stride);
 void fb_fill(u32 x, u32 y, u32 w, u32 h, rgb_t color);
-void x6e3_crumb(int n);
+void boot_progress(int n);
 void fb_clear(rgb_t color);
 void fb_clear_direct(void);
 

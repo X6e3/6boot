@@ -2918,15 +2918,15 @@ int kboot_boot(void *kernel)
     clk_init();
     xboot_trace(XBT_CLOCKS,XBT_END,XBT_NO_RESULT);
 
-    x6e3_crumb(5);
+    boot_progress(5);
     xboot_trace(XBT_USB,XBT_BEGIN,XBT_NO_RESULT);
     usb_init();
     xboot_trace(XBT_USB,XBT_END,XBT_NO_RESULT);
-    x6e3_crumb(6);
+    boot_progress(6);
     xboot_trace(XBT_PCIE,XBT_BEGIN,XBT_NO_RESULT);
     pcie_init();
     xboot_trace(XBT_PCIE,XBT_END,XBT_NO_RESULT);
-    x6e3_crumb(7);
+    boot_progress(7);
     /* HACK: DAPF init raises an SError on T8132. */
     if (chip_id != T8132)
         dapf_init_all();
