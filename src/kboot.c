@@ -28,6 +28,7 @@
 #include "usb.h"
 #include "utils.h"
 #include "boottrace_adapter.h"
+#include "entry_probe.h"
 #include "fb.h"
 #include "xnuboot.h"
 
@@ -2869,6 +2870,9 @@ static int kboot_prepare_dt_impl(void *fdt)
      */
     if (dt_set_memory())
         return -1;
+
+    /* 6boot P3: call the entry probe once and record that it returned. */
+    entry_probe_run(dt);
 
     if (xboot_prepare_record(dt, dt_bufsize))
         return -1;

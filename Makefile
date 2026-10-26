@@ -153,7 +153,7 @@ OBJECTS := \
 	iodev.o \
 	iova.o \
 	isp.o \
-	kboot.o kboot_atc.o xboot_boottrace.o boottrace_adapter.o xboot_contract.o xboot_record.o xboot_j713.o m1n1_adapter.o \
+	kboot.o kboot_atc.o entry_probe.o xboot_boottrace.o boottrace_adapter.o xboot_contract.o xboot_record.o xboot_j713.o m1n1_adapter.o \
 	kboot_t6020_compat.o \
 	main.o \
 	mitigations.o \
