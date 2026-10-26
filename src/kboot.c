@@ -22,10 +22,13 @@
 #include "sep.h"
 #include "sio.h"
 #include "smp.h"
+#include "m1n1_adapter.h"
 #include "tunables.h"
 #include "types.h"
 #include "usb.h"
 #include "utils.h"
+#include "boottrace_adapter.h"
+#include "fb.h"
 #include "xnuboot.h"
 
 #include "libfdt/libfdt.h"
@@ -386,6 +389,7 @@ static int dt_set_memory(void)
         printf("FDT: Reserving CTRR range 0x%lx..0x%lx\n", ctrr_start, ctrr_end);
         if (fdt_add_mem_rsv(dt, ctrr_start, ctrr_end - ctrr_start))
             bail("FDT: Could not reserve CTRR range\n");
+        xboot_capture_ctrr(ctrr_start, ctrr_end - ctrr_start);
     }
 
     printf("FDT: DRAM at 0x%lx size 0x%lx\n", dram_base, dram_size);
@@ -609,6 +613,7 @@ static int dt_set_cpus(void)
             bail_cleanup("FDT: DT CPU %d MPIDR mismatch: 0x%lx != 0x%lx\n", cpu, dt_mpidr, mpidr);
 
         u64 release_addr = smp_get_release_addr(cpu);
+        xboot_capture_release(cpu, mpidr, release_addr);
         if (fdt_setprop_inplace_u64(dt, node, "cpu-release-addr", release_addr))
             bail_cleanup("FDT: couldn't set cpu-release-addr property\n");
 
@@ -2762,8 +2767,10 @@ static int dt_setup_mtd_phram(void)
     return 0;
 }
 
-int kboot_prepare_dt(void *fdt)
+static int kboot_prepare_dt_impl(void *fdt)
 {
+    if (xboot_begin_dt(fdt))
+        return -1;
     if (dt) {
         free(dt);
         dt = NULL;
@@ -2863,6 +2870,11 @@ int kboot_prepare_dt(void *fdt)
     if (dt_set_memory())
         return -1;
 
+    if (xboot_prepare_record(dt, dt_bufsize))
+        return -1;
+
+    xboot_trace_dt_prepare(dt,dt_bufsize);
+
     if (fdt_pack(dt))
         bail("FDT: fdt_pack() failed\n");
 
@@ -2872,17 +2884,45 @@ int kboot_prepare_dt(void *fdt)
 
     printf("FDT prepared at %p\n", dt);
 
-    return 0;
+    return xboot_dt_prepared();
+}
+
+int kboot_prepare_dt(void *fdt)
+{
+    xboot_trace_dt_clear();
+    int ret = kboot_prepare_dt_impl(fdt);
+    if (ret)
+        xboot_dt_failed(ret);
+    return ret;
 }
 
 int kboot_boot(void *kernel)
 {
+    next_stage.entry = NULL;
+    xboot_trace(XBT_HANDOFF,XBT_BEGIN,XBT_NO_RESULT);
+    int first_check=xboot_check_handoff(kernel, dt, dt_bufsize, initrd_start, initrd_size);
+    xboot_trace(XBT_HANDOFF,XBT_END,first_check);
+    if (first_check)
+        return -1;
+    xboot_trace(XBT_CACHE,XBT_BEGIN,XBT_NO_RESULT);
     mcc_enable_cache();
+    xboot_trace(XBT_CACHE,XBT_END,XBT_NO_RESULT);
+    xboot_trace(XBT_TUNABLES,XBT_BEGIN,XBT_NO_RESULT);
     tunables_apply_static();
+    xboot_trace(XBT_TUNABLES,XBT_END,XBT_NO_RESULT);
+    xboot_trace(XBT_CLOCKS,XBT_BEGIN,XBT_NO_RESULT);
     clk_init();
+    xboot_trace(XBT_CLOCKS,XBT_END,XBT_NO_RESULT);
 
+    x6e3_crumb(5);
+    xboot_trace(XBT_USB,XBT_BEGIN,XBT_NO_RESULT);
     usb_init();
+    xboot_trace(XBT_USB,XBT_END,XBT_NO_RESULT);
+    x6e3_crumb(6);
+    xboot_trace(XBT_PCIE,XBT_BEGIN,XBT_NO_RESULT);
     pcie_init();
+    xboot_trace(XBT_PCIE,XBT_END,XBT_NO_RESULT);
+    x6e3_crumb(7);
     /* HACK: DAPF init raises an SError on T8132. */
     if (chip_id != T8132)
         dapf_init_all();
@@ -2890,6 +2930,14 @@ int kboot_boot(void *kernel)
     printf("Setting SMP mode to WFE...\n");
     smp_set_wfe_mode(true);
     printf("Preparing to boot kernel at %p with fdt at %p\n", kernel, dt);
+
+    xboot_trace(XBT_HANDOFF,XBT_BEGIN,XBT_NO_RESULT);
+    int final_check=xboot_check_handoff(kernel, dt, dt_bufsize, initrd_start, initrd_size);
+    if (!final_check)
+        final_check=xboot_arm_handoff(kernel, dt);
+    xboot_trace(XBT_HANDOFF,XBT_END,final_check);
+    if (final_check)
+        return -1;
 
     next_stage.entry = kernel;
     next_stage.args[0] = (u64)dt;

@@ -19,6 +19,7 @@
 #include "pcie.h"
 #include "pmgr.h"
 #include "smp.h"
+#include "m1n1_adapter.h"
 #include "string.h"
 #include "tunables.h"
 #include "types.h"
@@ -101,6 +102,7 @@ int proxy_process(ProxyRequest *request, ProxyReply *reply)
                                      request->args[3], request->args[4]);
             break;
         case P_VECTOR:
+            xboot_proxy_override();
             // forcefully restore tps6598x IRQs
             usb_hpm_restore_irqs(1);
             iodev_console_flush();

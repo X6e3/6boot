@@ -90,6 +90,19 @@ void uart_write(const void *buf, size_t count)
         uart_putbyte(*p++);
 }
 
+/* P2T: total polling budget across the whole line, no endless FIFO wait. */
+size_t uart_write_bounded(const void *buf, size_t count, unsigned polls)
+{
+    if (!uart_base || !buf) return 0;
+    const u8 *p=buf;size_t sent=0;
+    while (sent<count && polls) {
+        polls--;
+        if (read32(uart_base + UTRSTAT) & UTRSTAT_TXBE)
+            write32(uart_base + UTXH,p[sent++]);
+    }
+    return sent;
+}
+
 size_t uart_read(void *buf, size_t count)
 {
     u8 *p = buf;

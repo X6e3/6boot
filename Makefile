@@ -61,7 +61,7 @@ BASE_CFLAGS := -O2 -Wall -g -Wundef -Werror=strict-prototypes -fno-common -fno-P
 	-Wsign-compare -Wunused-parameter -Wno-multichar \
 	-ffreestanding -fpic -ffunction-sections -fdata-sections \
 	-nostdinc -isystem $(shell $(CC) -print-file-name=include) -isystem sysinc \
-	-Isrc \
+	-Isrc -Isrc/libfdt \
 	-fno-stack-protector -mstrict-align -march=armv8.2-a \
 	$(EXTRA_CFLAGS)
 
@@ -103,7 +103,7 @@ TINF_OBJECTS := $(patsubst %,tinf/%, \
 DLMALLOC_OBJECTS := dlmalloc/malloc.o
 
 LIBFDT_OBJECTS := $(patsubst %,libfdt/%, \
-	fdt_addresses.o fdt_empty_tree.o fdt_ro.o fdt_rw.o fdt_strerror.o fdt_sw.o \
+	fdt_addresses.o fdt_check.o fdt_empty_tree.o fdt_ro.o fdt_rw.o fdt_strerror.o fdt_sw.o \
 	fdt_wip.o fdt.o)
 
 CHICKENS_OBJECTS := $(patsubst %,chickens/%, \
@@ -153,7 +153,7 @@ OBJECTS := \
 	iodev.o \
 	iova.o \
 	isp.o \
-	kboot.o kboot_atc.o \
+	kboot.o kboot_atc.o xboot_boottrace.o boottrace_adapter.o xboot_contract.o xboot_record.o xboot_j713.o m1n1_adapter.o \
 	kboot_t6020_compat.o \
 	main.o \
 	mitigations.o \

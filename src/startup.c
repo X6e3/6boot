@@ -10,6 +10,7 @@
 #include "types.h"
 #include "uart.h"
 #include "utils.h"
+#include "boottrace_adapter.h"
 #include "xnuboot.h"
 
 u64 boot_args_addr;
@@ -165,6 +166,8 @@ void _start_c(void *boot_args, void *base)
     u32 cpu_id = 0;
 
     memset64(_bss_start, 0, _bss_end - _bss_start);
+    xboot_trace_init();
+    xboot_trace(XBT_ENTRY,XBT_POINT,XBT_NO_RESULT);
     boot_args_addr = (u64)boot_args;
     memcpy(&cur_boot_args, boot_args, sizeof(cur_boot_args));
 
@@ -191,7 +194,9 @@ void _start_c(void *boot_args, void *base)
     else
         msr(TPIDR_EL1, cpu_id);
 
+    xboot_trace(XBT_UART,XBT_BEGIN,XBT_NO_RESULT);
     int ret = uart_init();
+    xboot_trace(XBT_UART,XBT_END,ret);
     if (ret < 0) {
         debug_putc('!');
     }
@@ -200,10 +205,13 @@ void _start_c(void *boot_args, void *base)
     dockchannel_uart_init();
 
     uart_puts("Initializing");
+    xboot_trace_uart_ready(ret == 0);
     get_device_info();
 
     printf("CPU init (MIDR: 0x%lx smp_id:0x%x)...\n", mrs(MIDR_EL1), smp_id());
+    xboot_trace(XBT_CPU,XBT_BEGIN,XBT_NO_RESULT);
     init_cpu();
+    xboot_trace(XBT_CPU,XBT_END,XBT_NO_RESULT);
     printf("\n");
 
     printf("boot_args at %p\n", boot_args);
@@ -211,7 +219,10 @@ void _start_c(void *boot_args, void *base)
     dump_boot_args(&cur_boot_args);
     printf("\n");
 
+    xboot_trace(XBT_EXCEPTIONS,XBT_BEGIN,XBT_NO_RESULT);
     exception_initialize();
+    xboot_trace_timer_ready();
+    xboot_trace(XBT_EXCEPTIONS,XBT_END,XBT_NO_RESULT);
     m1n1_main();
 }
 

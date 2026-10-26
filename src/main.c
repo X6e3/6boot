@@ -22,12 +22,14 @@
 #include "pmgr.h"
 #include "sep.h"
 #include "smp.h"
+#include "m1n1_adapter.h"
 #include "string.h"
 #include "tps6598x.h"
 #include "uart.h"
 #include "uartproxy.h"
 #include "usb.h"
 #include "utils.h"
+#include "boottrace_adapter.h"
 #include "wdt.h"
 #include "xnuboot.h"
 
@@ -119,7 +121,10 @@ void run_actions(void)
 
     printf("Checking for payloads...\n");
 
-    if (payload_run() == 0) {
+    xboot_trace(XBT_PAYLOAD,XBT_BEGIN,XBT_NO_RESULT);
+    int payload_result=payload_run();
+    xboot_trace(XBT_PAYLOAD,XBT_END,payload_result);
+    if (payload_result == 0) {
         printf("Valid payload found\n");
         return;
     }
@@ -147,30 +152,50 @@ void m1n1_main(void)
 
     printf("Running in EL%lu\n\n", mrs(CurrentEL) >> 2);
 
+    xboot_trace(XBT_FIRMWARE,XBT_BEGIN,XBT_NO_RESULT);
     firmware_init();
+    xboot_trace(XBT_FIRMWARE,XBT_END,XBT_NO_RESULT);
 
+    xboot_trace(XBT_HEAP,XBT_BEGIN,XBT_NO_RESULT);
     heapblock_init();
+    xboot_trace(XBT_HEAP,XBT_END,XBT_NO_RESULT);
 
 #ifndef BRINGUP
-    if (supports_gxf())
+    if (supports_gxf()) {
+        xboot_trace(XBT_GXF,XBT_BEGIN,XBT_NO_RESULT);
         gxf_init();
+        xboot_trace(XBT_GXF,XBT_END,XBT_NO_RESULT);
+    }
+    xboot_trace(XBT_MCC,XBT_BEGIN,XBT_NO_RESULT);
     mcc_init();
+    xboot_trace(XBT_MCC,XBT_END,XBT_NO_RESULT);
+    xboot_trace(XBT_MMU,XBT_BEGIN,XBT_NO_RESULT);
     mmu_init();
+    xboot_trace(XBT_MMU,XBT_END,XBT_NO_RESULT);
+    xboot_trace(XBT_AIC,XBT_BEGIN,XBT_NO_RESULT);
     aic_init();
+    xboot_trace(XBT_AIC,XBT_END,XBT_NO_RESULT);
 #endif
     wdt_disable();
 #ifndef BRINGUP
+    xboot_trace(XBT_PMGR,XBT_BEGIN,XBT_NO_RESULT);
     pmgr_init();
+    xboot_trace(XBT_PMGR,XBT_END,XBT_NO_RESULT);
 #ifdef USE_DEBUG_USB
     tps6598x_enable_debugusb();
 #endif
 #ifdef USE_FB
-    display_init();
+    xboot_trace(XBT_DISPLAY,XBT_BEGIN,XBT_NO_RESULT);
+    int display_result=display_init();
+    xboot_trace(XBT_DISPLAY,XBT_END,display_result);
     // Kick DCP to sleep, so dodgy monitors which cause reconnect cycles don't cause us to lose the
     // framebuffer.
     display_shutdown(DCP_SLEEP_IF_EXTERNAL);
     // On idevice we need to always clear, because otherwise it looks scuffed on white devices
+    xboot_trace(XBT_FB,XBT_BEGIN,XBT_NO_RESULT);
     fb_init(!is_mac);
+    xboot_trace_fb_ready();
+    xboot_trace(XBT_FB,XBT_END,XBT_NO_RESULT);
     fb_display_logo();
 #ifdef FB_SILENT_MODE
     fb_set_active(!cur_boot_args.video.display);
@@ -179,8 +204,12 @@ void m1n1_main(void)
 #endif
 #endif
 
+    xboot_trace(XBT_CPUFREQ_FIXUP,XBT_BEGIN,XBT_NO_RESULT);
     cpufreq_fixup();
-    sep_init();
+    xboot_trace(XBT_CPUFREQ_FIXUP,XBT_END,XBT_NO_RESULT);
+    xboot_trace(XBT_SEP_TRANSPORT,XBT_BEGIN,XBT_NO_RESULT);
+    int sep_result=sep_init();
+    xboot_trace(XBT_SEP_TRANSPORT,XBT_END,sep_result);
 #endif
 
     printf("Initialization complete.\n");
@@ -191,20 +220,48 @@ void m1n1_main(void)
         panic("Nothing to do!\n");
     }
 
+    xboot_trace(XBT_HANDOFF,XBT_BEGIN,XBT_NO_RESULT);
+    int vector_allowed=xboot_vector_allowed(next_stage.entry, next_stage.args[0],
+                              next_stage.args[1], next_stage.args[2],
+                              next_stage.args[3], next_stage.args[4]);
+    xboot_trace(XBT_HANDOFF,XBT_END,vector_allowed ? 0 : -1);
+    if (!vector_allowed)
+        panic("XBOOT: refusing unvalidated kernel handoff\n");
+
     printf("Preparing to run next stage at %p...\n", next_stage.entry);
 
+    xboot_trace(XBT_NVME_STOP,XBT_BEGIN,XBT_NO_RESULT);
     nvme_shutdown();
+    xboot_trace(XBT_NVME_STOP,XBT_END,XBT_NO_RESULT);
+    x6e3_crumb(8);
+    xboot_trace(XBT_EXCEPTIONS_STOP,XBT_BEGIN,XBT_NO_RESULT);
     exception_shutdown();
+    xboot_trace(XBT_EXCEPTIONS_STOP,XBT_END,XBT_NO_RESULT);
+    x6e3_crumb(9);
 #ifndef BRINGUP
+    xboot_trace(XBT_USB_STOP,XBT_BEGIN,XBT_NO_RESULT);
     usb_iodev_shutdown();
+    xboot_trace(XBT_USB_STOP,XBT_END,XBT_NO_RESULT);
+    x6e3_crumb(10);
+    xboot_trace(XBT_DISPLAY_STOP,XBT_BEGIN,XBT_NO_RESULT);
     display_shutdown(DCP_SLEEP_IF_EXTERNAL);
+    xboot_trace(XBT_DISPLAY_STOP,XBT_END,XBT_NO_RESULT);
+    x6e3_crumb(11);
 #ifdef USE_FB
+    xboot_trace(XBT_OUTPUTS_RELEASE,XBT_POINT,XBT_NO_RESULT);
+    xboot_trace_outputs_off();
+    xboot_trace(XBT_FB_STOP,XBT_BEGIN,XBT_NO_RESULT);
     fb_shutdown(next_stage.restore_logo);
+    xboot_trace(XBT_FB_STOP,XBT_END,XBT_NO_RESULT);
+    x6e3_crumb(12);
 #endif
+    xboot_trace(XBT_MMU_STOP,XBT_BEGIN,XBT_NO_RESULT);
+    xboot_trace_freeze_dt();
     mmu_shutdown();
 #endif
 
     printf("Vectoring to next stage...\n");
+    x6e3_crumb(13);
 
     next_stage.entry(next_stage.args[0], next_stage.args[1], next_stage.args[2], next_stage.args[3],
                      next_stage.args[4]);

@@ -196,6 +196,31 @@ void fb_unblit(u32 x, u32 y, u32 w, u32 h, void *data, u32 stride)
     }
 }
 
+/*
+ * x6e3 low-intrusion boot breadcrumbs. Square n (48x48) at x=1152+64n, y=1400: outside the console
+ * area m1n1 clears (x<1088, 64<=y<1600) and below the logo. Drawn into the hardware framebuffer
+ * and, while it exists, into the shadow buffer, so a later fb_update() copy cannot erase it.
+ * 0-7 green = stage2 progress, 8-12 cyan = teardown steps, 13 white = right before the kernel branch.
+ */
+void x6e3_crumb(int n)
+{
+    u32 *hw = (u32 *)cur_boot_args.video.base;
+    u32 stride = cur_boot_args.video.stride / 4;
+    u32 width = cur_boot_args.video.width, height = cur_boot_args.video.height;
+    u32 x0 = 1152 + n * 64, y0 = 1400;
+    if (!hw || !stride || x0 + 48 > width || y0 + 48 > height)
+        return;
+    rgb_t c = n == 13 ? (rgb_t){0xff, 0xff, 0xff} : n >= 8 ? (rgb_t){0x00, 0xff, 0xff} : (rgb_t){0x00, 0xff, 0x00};
+    u32 px = rgb2pixel(c);
+    for (u32 y = 0; y < 48; y++)
+        for (u32 x = 0; x < 48; x++) {
+            hw[(y0 + y) * stride + x0 + x] = px;
+            if (console.initialized && fb.ptr)
+                fb.ptr[(y0 + y) * fb.stride + x0 + x] = px;
+        }
+    __asm__ volatile("dsb sy" ::: "memory");
+}
+
 void fb_fill(u32 x, u32 y, u32 w, u32 h, rgb_t color)
 {
     if (!console.initialized)
@@ -283,6 +308,38 @@ static inline rgb_t font_get_pixel(u8 c, u32 x, u32 y)
 
     rgb_t col = {.r = v, .g = v, .b = v};
     return col;
+}
+
+/* P2T: bounded footer in existing framebuffer and font. No full-screen copy. */
+void fb_boot_status(const char *line, size_t length, bool failed)
+{
+    if (!console.initialized || !fb.ptr || !fb.hwptr || !line ||
+        !console.font.ptr || !console.font.width || !console.font.height ||
+        fb.width<4*console.font.width || fb.height<console.font.height ||
+        fb.stride<fb.width || (u64)fb.stride*4*fb.height>fb.size)
+        return;
+    u32 y0=fb.height-console.font.height;
+    for (u32 y=y0;y<fb.height;y++)
+        for (u32 x=0;x<fb.width;x++) {
+            size_t off=(size_t)y*fb.stride+x;
+            fb.ptr[off]=fb.hwptr[off]=0;
+        }
+    u32 column=1,max_columns=fb.width/console.font.width-1;
+    for (size_t n=0;n<length && column<max_columns;n++) {
+        u8 c=(u8)line[n];
+        if (c=='\r' || c=='\n')break;
+        if (c<0x20 || c>=0x7f)c='?';
+        for (u32 y=0;y<console.font.height;y++)
+            for (u32 x=0;x<console.font.width;x++) {
+                rgb_t rgb=font_get_pixel(c,x,y);
+                if (failed) { rgb.g/=2;rgb.b/=2; }
+                size_t off=(size_t)(y0+y)*fb.stride+column*console.font.width+x;
+                u32 pixel=rgb2pixel(rgb);
+                fb.ptr[off]=fb.hwptr[off]=pixel;
+            }
+        column++;
+    }
+    __asm__ volatile("dsb sy" ::: "memory");
 }
 
 static void fb_putbyte(u8 c)
