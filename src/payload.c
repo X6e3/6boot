@@ -17,6 +17,9 @@
 #include "utils.h"
 #include "boottrace_adapter.h"
 #include "fb.h"
+#ifdef SIXBOOT_EL2_NATIVE
+#include "el2_native.h"
+#endif
 
 #include "libfdt/libfdt.h"
 #include "minilzlib/minlzma.h"
@@ -361,6 +364,9 @@ int payload_run(void)
 
         boot_progress(3);
         xboot_trace(XBT_DT,XBT_BEGIN,XBT_NO_RESULT);
+#ifdef SIXBOOT_EL2_NATIVE
+        el2_native_set_kernel(kernel);
+#endif
         int dt_result=kboot_prepare_dt(fdt);
         xboot_trace(XBT_DT,XBT_END,dt_result);
         if (dt_result) {

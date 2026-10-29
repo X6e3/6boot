@@ -21,6 +21,10 @@
 #include "string.h"
 #include "utils.h"
 #include "xnuboot.h"
+#include "../build/build_cfg.h"
+#ifdef SIXBOOT_EL2_NATIVE
+#include "el2_native.h"
+#endif
 
 #include "../build/entry_probe_image.h"
 
@@ -126,5 +130,10 @@ int entry_probe_run(void *dt)
 
     entry_probe_record(dt, context, result, (u32)ret, t1 - t0, (u64)image);
     free(image);
+#ifdef SIXBOOT_EL2_NATIVE
+    if(ret || *(u32 *)result!=0x58505242 || *(u32 *)(result+12)!=0)
+        return -1;
+    return el2_native_run(dt);
+#endif
     return ret;
 }

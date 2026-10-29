@@ -194,6 +194,10 @@ FP_OBJECTS := \
 	math/powf.o \
 	math/powf_data.o
 
+ifneq ($(filter SIXBOOT_EL2_NATIVE,$(CFG)),)
+OBJECTS += el2_native.o el2_native_gate.o el2_native_policy.o el2_native_fdt.o el2_native_mapping.o
+endif
+
 BUILD_OBJS := $(patsubst %,build/%,$(OBJECTS))
 BUILD_FP_OBJS := $(patsubst %,build/%,$(FP_OBJECTS))
 BUILD_RUST_LIB := $(patsubst %,build/%,$(RUST_LIB))
@@ -206,6 +210,20 @@ DEPDIR := build/.deps
 
 .PHONY: all clean format invoke_cc always_rebuild
 all: build/$(TARGET) build/$(TARGET_RAW)
+
+# These objects and the generated image header are used only by a separately
+# built development image with CFG=SIXBOOT_EL2_NATIVE.
+EL2_NATIVE_HEADERS := $(wildcard experiments/el2-control/native/*.h experiments/el2-control/include/*.h) src/el2_native.h
+build/el2_native.o: experiments/el2-control/native/adapter.c build/el2_native_image.h build/build_cfg.h $(EL2_NATIVE_HEADERS)
+	$(CC) $(CFLAGS) -Ibuild -Iexperiments/el2-control/native -c $< -o $@
+build/el2_native_gate.o: experiments/el2-control/native/gate.S $(EL2_NATIVE_HEADERS)
+	$(AS) $(BASE_CFLAGS) -Iexperiments/el2-control/native -c $< -o $@
+build/el2_native_policy.o: experiments/el2-control/native/policy.c $(EL2_NATIVE_HEADERS)
+	$(CC) $(CFLAGS) -Iexperiments/el2-control/native -c $< -o $@
+build/el2_native_fdt.o: experiments/el2-control/native/fdt_memory.c $(EL2_NATIVE_HEADERS)
+	$(CC) $(CFLAGS) -Iexperiments/el2-control/native -c $< -o $@
+build/el2_native_mapping.o: experiments/el2-control/native/mapping.c $(EL2_NATIVE_HEADERS)
+	$(CC) $(CFLAGS) -Iexperiments/el2-control/native -c $< -o $@
 clean:
 	rm -rf build/* build/.deps
 format:

@@ -31,6 +31,10 @@
 #include "entry_probe.h"
 #include "fb.h"
 #include "xnuboot.h"
+#include "../build/build_cfg.h"
+#ifdef SIXBOOT_EL2_NATIVE
+#include "el2_native.h"
+#endif
 
 #include "libfdt/libfdt.h"
 
@@ -391,6 +395,9 @@ static int dt_set_memory(void)
         if (fdt_add_mem_rsv(dt, ctrr_start, ctrr_end - ctrr_start))
             bail("FDT: Could not reserve CTRR range\n");
         xboot_capture_ctrr(ctrr_start, ctrr_end - ctrr_start);
+#ifdef SIXBOOT_EL2_NATIVE
+        el2_native_set_ctrr(ctrr_start,ctrr_end-ctrr_start);
+#endif
     }
 
     printf("FDT: DRAM at 0x%lx size 0x%lx\n", dram_base, dram_size);
@@ -2872,7 +2879,12 @@ static int kboot_prepare_dt_impl(void *fdt)
         return -1;
 
     /* 6boot P3: call the entry probe once and record that it returned. */
+#ifdef SIXBOOT_EL2_NATIVE
+    if(entry_probe_run(dt))
+        bail("6boot EL2_NATIVE: P3/native adapter blocked kernel handoff\n");
+#else
     entry_probe_run(dt);
+#endif
 
     if (xboot_prepare_record(dt, dt_bufsize))
         return -1;
@@ -2903,6 +2915,10 @@ int kboot_prepare_dt(void *fdt)
 int kboot_boot(void *kernel)
 {
     next_stage.entry = NULL;
+#ifdef SIXBOOT_EL2_NATIVE
+    if(!el2_native_handoff_allowed())
+        bail("6boot EL2_NATIVE: handoff latch is blocked\n");
+#endif
     xboot_trace(XBT_HANDOFF,XBT_BEGIN,XBT_NO_RESULT);
     int first_check=xboot_check_handoff(kernel, dt, dt_bufsize, initrd_start, initrd_size);
     xboot_trace(XBT_HANDOFF,XBT_END,first_check);
@@ -2937,6 +2953,9 @@ int kboot_boot(void *kernel)
 
     xboot_trace(XBT_HANDOFF,XBT_BEGIN,XBT_NO_RESULT);
     int final_check=xboot_check_handoff(kernel, dt, dt_bufsize, initrd_start, initrd_size);
+#ifdef SIXBOOT_EL2_NATIVE
+    if(!el2_native_handoff_allowed()) final_check=-1;
+#endif
     if (!final_check)
         final_check=xboot_arm_handoff(kernel, dt);
     xboot_trace(XBT_HANDOFF,XBT_END,final_check);
