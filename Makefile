@@ -230,6 +230,25 @@ all: build/$(TARGET) build/$(TARGET_RAW)
 $(BUILD_ALL_OBJS): build/build_cfg.h build/build_tag.h
 
 
+# Two generated headers. tools/build-j713.sh writes both into build/ before it
+# runs make; an entry_probe_image.h already there is left alone. A plain make
+# generates them here.
+ENTRY_PROBE_CC ?= $(CC)
+ENTRY_PROBE_LD ?= $(LD)
+build/die_blocks.h: data/die_blocks.h
+	$(QUIET)echo "  CP    $@"
+	$(QUIET)mkdir -p build
+	$(QUIET)cp $< $@
+build/entry_probe_image.h:
+	$(QUIET)echo "  P3    $@"
+	$(QUIET)$(MAKE) -s -C entry-probe BUILD=$(CURDIR)/build/entry-probe \
+		CC="$(ENTRY_PROBE_CC)" LD="$(ENTRY_PROBE_LD)" firmware
+	$(QUIET)$(OBJCOPY) -O binary --only-section=.text --only-section=.rodata \
+		build/entry-probe/xboot-entry-probe.elf build/entry-probe.bin
+	$(QUIET)python3 -I tools/embed_entry_probe.py build/entry-probe.bin $@
+build/fb.o: build/die_blocks.h
+build/entry_probe.o: build/entry_probe_image.h
+
 # These objects and the generated image header are used only by a separately
 # built development image with CFG=SIXBOOT_EL2_NATIVE.
 EL2_NATIVE_HEADERS := $(wildcard experiments/el2-control/native/*.h experiments/el2-control/include/*.h) src/el2_native.h
