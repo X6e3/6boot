@@ -198,6 +198,20 @@ ifneq ($(filter SIXBOOT_EL2_NATIVE,$(CFG)),)
 OBJECTS += el2_native.o el2_native_gate.o el2_native_policy.o el2_native_fdt.o el2_native_mapping.o
 endif
 
+# Development experiments are selected in source, never by patching a copy.
+ifneq ($(filter SIXBOOT_E0_FB_SMOKE,$(CFG)),)
+ifneq ($(filter SIXBOOT_EL2_NATIVE,$(CFG)),)
+$(error SIXBOOT_E0_FB_SMOKE conflicts with SIXBOOT_EL2_NATIVE)
+endif
+ifeq ($(filter SIXBOOT_E0_VISUAL,$(CFG)),)
+$(error SIXBOOT_E0_FB_SMOKE requires SIXBOOT_E0_VISUAL)
+endif
+ifneq ($(filter NO_DISPLAY BRINGUP,$(CFG)),)
+$(error SIXBOOT_E0_FB_SMOKE requires the normal framebuffer boot path)
+endif
+OBJECTS += e0_visual_smoke.o e0_visual_smoke_record.o
+endif
+
 BUILD_OBJS := $(patsubst %,build/%,$(OBJECTS))
 BUILD_FP_OBJS := $(patsubst %,build/%,$(FP_OBJECTS))
 BUILD_RUST_LIB := $(patsubst %,build/%,$(RUST_LIB))
@@ -229,6 +243,12 @@ build/el2_native_fdt.o: experiments/el2-control/native/fdt_memory.c $(EL2_NATIVE
 	$(CC) $(CFLAGS) -Iexperiments/el2-control/native -c $< -o $@
 build/el2_native_mapping.o: experiments/el2-control/native/mapping.c $(EL2_NATIVE_HEADERS)
 	$(CC) $(CFLAGS) -Iexperiments/el2-control/native -c $< -o $@
+build/e0_visual_smoke.o: experiments/el2-control/e0/visual_smoke.c experiments/el2-control/e0/visual_smoke.h build/e0_visual_build.h
+	$(QUIET)mkdir -p $(DEPDIR)
+	$(CC) $(CFLAGS) -Ibuild -Iexperiments/el2-control/e0 -MMD -MF $(DEPDIR)/e0_visual_smoke.d -MQ "$@" -MP -c $< -o $@
+build/e0_visual_smoke_record.o: experiments/el2-control/e0/visual_smoke_record.c experiments/el2-control/e0/visual_smoke.h
+	$(QUIET)mkdir -p $(DEPDIR)
+	$(CC) $(CFLAGS) -Iexperiments/el2-control/e0 -MMD -MF $(DEPDIR)/e0_visual_smoke_record.d -MQ "$@" -MP -c $< -o $@
 clean:
 	rm -rf build/* build/.deps
 format:

@@ -36,6 +36,10 @@
 #include "el2_native.h"
 #endif
 
+#ifdef SIXBOOT_E0_FB_SMOKE
+#include "../experiments/el2-control/e0/visual_smoke.h"
+#include "../build/e0_visual_build.h"
+#endif
 #include "libfdt/libfdt.h"
 
 #define MAX_CHOSEN_PARAMS 16
@@ -2878,12 +2882,75 @@ static int kboot_prepare_dt_impl(void *fdt)
     if (dt_set_memory())
         return -1;
 
-    /* 6boot P3: call the entry probe once and record that it returned. */
+    /* P3 owns only its call. Experiment selection and handoff are local policy. */
+#if defined(SIXBOOT_EL2_NATIVE) && defined(SIXBOOT_E0_FB_SMOKE)
+#error "SIXBOOT_EL2_NATIVE and SIXBOOT_E0_FB_SMOKE are mutually exclusive"
+#endif
+    struct entry_probe_outcome p3;
+    int p3_return = entry_probe_run(dt, &p3);
+    if (!p3.context_ok) {
+        /* DAIF restoration was not established. No framebuffer/USB fallback. */
+        __asm__ volatile("msr daifset, #0xf; isb; 1: b 1b" ::: "memory");
+        __builtin_unreachable();
+    }
+#if defined(SIXBOOT_EL2_NATIVE) || defined(SIXBOOT_E0_FB_SMOKE)
+    const int p3_ok = !p3_return && p3.valid && !p3.publication_error && p3.context_ok;
+    if (!p3_ok)
+        bail("6boot P3: execution/ABI=%d valid=%d publication=%d; handoff denied\n",
+             p3_return, p3.valid, p3.publication_error);
 #ifdef SIXBOOT_EL2_NATIVE
-    if(entry_probe_run(dt))
-        bail("6boot EL2_NATIVE: P3/native adapter blocked kernel handoff\n");
+    if (el2_native_run(dt))
+        bail("6boot EL2_NATIVE: native continuation veto\n");
 #else
-    entry_probe_run(dt);
+    int mode_size;
+    const char *smoke_mode = fdt_getprop(dt, fdt_path_offset(dt, "/chosen"),
+                                       "6boot,e0-visual-mode", &mode_size);
+    if (!smoke_mode || mode_size != 6 || memcmp(smoke_mode, "smoke", 6))
+        bail("6boot FB_SMOKE: explicit smoke selection missing\n");
+    int args_size = 0;
+    const char *smoke_args = fdt_getprop(dt, fdt_path_offset(dt, "/chosen"), "bootargs", &args_size);
+    if (!e0_visual_smoke_bootargs(smoke_args, args_size, E0_VISUAL_BUILD_ID))
+        bail("6boot FB_SMOKE: bootargs/build mismatch; no experiment entered\n");
+    int reservation = e0_visual_smoke_reserve(dt);
+    if (reservation)
+        bail("6boot FB_SMOKE: evidence reservation failed (%d); no experiment entered\n", reservation);
+    struct e0_visual_smoke_v2 visual;
+    struct fb_e0_translation translation;
+    printf("6boot FB_SMOKE BEGIN build=%016lx (NO STAGE-2 TEST)\n", (u64)E0_VISUAL_BUILD_ID);
+    e0_visual_smoke_run(&visual, &translation);
+    if (e0_visual_smoke_decision(&visual, p3_ok, &translation) == E0VS_BLOCK_CONTEXT) {
+        /* The caller-owned result remains in RAM. Do not call C diagnostics,
+         * FDT publication or the normal framebuffer/USB fallback when unsafe. */
+        __asm__ volatile(".global sixboot_smoke_unsafe\nsixboot_smoke_unsafe:\n"
+                         "msr daifset, #0xf; isb; 1: b 1b" ::: "memory");
+        __builtin_unreachable();
+    }
+    int publication = e0_visual_smoke_publish(dt, &visual, &translation);
+    unsigned decision = e0_visual_smoke_decision(&visual, p3_ok, &translation);
+    printf("6boot FB_SMOKE frames=%u error=%u reason=%u stage=%u safety=%x pub=%d decision=%u VM=%lu\n",
+           visual.v1.frames, visual.v1.error, visual.reason, visual.stage, visual.safety,
+           publication, decision, visual.v1.hcr_after & 1);
+    if (visual.v1.error || visual.outcome != E0VS_COMPLETE) {
+        printf("6boot FB_SMOKE FIRST frame=%u reason=%u stage=%u detail=0x%lx flags=0x%x\n",
+               visual.failed_frame, visual.reason, visual.stage, visual.detail,
+               visual.diagnostic_flags);
+        if ((visual.diagnostic_flags & (FB_E0_VA_VALID | FB_E0_PAR_VALID)) ==
+            (FB_E0_VA_VALID | FB_E0_PAR_VALID))
+            printf("6boot FB_SMOKE AT va=0x%lx PAR=0x%lx\n", visual.failed_va, visual.raw_par);
+    }
+    printf("6boot E0XT build=%016lx status=%u attr=%u samples=%u level=%u XS=%lu\n",
+           translation.build, translation.status, translation.attribute, translation.samples,
+           translation.level, (translation.isar1 >> 56) & 15);
+    if (translation.samples)
+        printf("6boot E0XT VA=0x%lx PA=0x%lx PAR=0x%lx leaf=0x%lx MAIR=0x%lx\n",
+               translation.va, translation.pa, translation.par,
+               translation.descriptors[translation.level < 4 ? translation.level : 0],
+               translation.resolved_mair);
+    if (publication || decision != E0VS_CONTINUE)
+        bail("6boot FB_SMOKE: evidence policy denied handoff\n");
+#endif
+#else
+    (void)p3_return;
 #endif
 
     if (xboot_prepare_record(dt, dt_bufsize))

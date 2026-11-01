@@ -1,0 +1,14 @@
+{
+  "scope": "physical Apple M4/J713 framebuffer refusal; not a rendering success",
+  "date": "2026-11-01",
+  "build_id": "f9fe36a50e175b99",
+  "image_sha256": "0704e47bb39174eedfc57a66d23c26dd2924f7a3f126d925ac3ed67c9151e3b4",
+  "record_sha256": "2abb489bf6e5e39ceb004046e82b6e571766d0fbc1952021108a198965d30316",
+  "wire_version": 2,
+  "bytes": 256,
+  "expected_verdict": "REFUSED",
+  "expected_reason": 9,
+  "observed_par_attr": "0x40",
+  "xs_feature_register": "NOT CAPTURED",
+  "leaf_descriptor": "NOT CAPTURED"
+}

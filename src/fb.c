@@ -937,3 +937,154 @@ void boot_progress(int n)
 #endif
     __asm__ volatile("dsb sy" ::: "memory");
 }
+
+#ifdef SIXBOOT_E0_VISUAL
+/* Boot-time, single-owner framebuffer experiment. Reuses the existing direct
+ * fill/font path and shadow, without changing console activation or DCP. */
+enum fb_e0_reason fb_e0_frame(unsigned world, enum fb_e0_state state,
+                              struct fb_e0_diagnostic *diagnostic)
+{
+    struct fb_e0_diagnostic local;
+    struct fb_e0_diagnostic *d = diagnostic ? diagnostic : &local;
+    *d = (struct fb_e0_diagnostic){0};
+#define REFUSE(R, S, D) do { d->reason = (R); d->stage = (S); d->detail = (D); return (R); } while (0)
+    const u64 base = cur_boot_args.video.base, stride = cur_boot_args.video.stride;
+    const u64 width = cur_boot_args.video.width, height = cur_boot_args.video.height;
+    const u64 depth = cur_boot_args.video.depth & FB_DEPTH_MASK;
+    u64 line = 4ULL << ((mrs(CTR_EL0) >> 16) & 15);
+    if (world > 1 || (unsigned)state > FB_E0_SMOKE)
+        REFUSE(FB_E0_ARGUMENT, FB_E0_STAGE_GEOMETRY, world);
+    /* detail is the first geometry predicate, not an inferred fault cause. */
+    if (!base) REFUSE(FB_E0_GEOMETRY, FB_E0_STAGE_GEOMETRY, 1);
+    if (base % line) REFUSE(FB_E0_GEOMETRY, FB_E0_STAGE_GEOMETRY, 2);
+    if (line < 64) REFUSE(FB_E0_GEOMETRY, FB_E0_STAGE_GEOMETRY, 3);
+    if (width < 400 || width > UINT32_MAX) REFUSE(FB_E0_GEOMETRY, FB_E0_STAGE_GEOMETRY, 4);
+    if (height < 180 || height > UINT32_MAX) REFUSE(FB_E0_GEOMETRY, FB_E0_STAGE_GEOMETRY, 5);
+    if (stride % 4) REFUSE(FB_E0_GEOMETRY, FB_E0_STAGE_GEOMETRY, 6);
+    if (stride / 4 > UINT32_MAX) REFUSE(FB_E0_GEOMETRY, FB_E0_STAGE_GEOMETRY, 7);
+    if (stride < width * 4) REFUSE(FB_E0_GEOMETRY, FB_E0_STAGE_GEOMETRY, 8);
+    if (height > UINT32_MAX / stride) REFUSE(FB_E0_GEOMETRY, FB_E0_STAGE_GEOMETRY, 9);
+    if (base > UINT64_MAX - stride * height) REFUSE(FB_E0_GEOMETRY, FB_E0_STAGE_GEOMETRY, 10);
+    if (depth != 30 && depth != 32) REFUSE(FB_E0_GEOMETRY, FB_E0_STAGE_GEOMETRY, 11);
+    if (base >= (1ULL << 48) || stride * height > (1ULL << 48) - base)
+        REFUSE(FB_E0_RANGE, FB_E0_STAGE_ADDRESS, base);
+    if (console.initialized && (!fb.ptr || (u64)fb.hwptr != base ||
+        fb.stride != stride / 4 || fb.size < stride * height))
+        REFUSE(FB_E0_SHADOW, FB_E0_STAGE_SHADOW, fb.size);
+    u32 x0 = (u32)(width - 400) / 2, y0 = (u32)(height - 180) / 2;
+    if (ALIGN_UP(base + ((u64)y0 + 179) * stride + ((u64)x0 + 400) * 4, line) > base + stride * height)
+        REFUSE(FB_E0_FOOTPRINT, FB_E0_STAGE_FOOTPRINT, stride * height);
+    if (mrs(CurrentEL) != 8)
+        REFUSE(FB_E0_REGIME, FB_E0_STAGE_REGIME, 0);
+    u64 hcr = mrs(HCR_EL2), tcr = mrs(TCR_EL2);
+    unsigned tg = (tcr >> 14) & 3, t0sz = tcr & 63;
+    /* The existing host mapper uses 64-bit descriptors and a low identity VA.
+     * Sample every ACTUAL granule, not every 16 KiB on a 4 KiB mapping. */
+    if (!(hcr & BIT(34)) || !(mrs(SCTLR_EL2) & 1) || t0sz < 16 || t0sz > 32 ||
+        ((tcr >> 32) & 7) > 5 || (tcr & BIT(59)) || (tg != 0 && tg != 2))
+        REFUSE(FB_E0_REGIME, FB_E0_STAGE_REGIME, tcr);
+    if (base + stride * height > (1ULL << (64 - t0sz)))
+        REFUSE(FB_E0_RANGE, FB_E0_STAGE_ADDRESS, tcr);
+    static const unsigned pa_bits[] = {32, 36, 40, 42, 44, 48};
+    if (base + stride * height > (1ULL << pa_bits[(tcr >> 32) & 7]))
+        REFUSE(FB_E0_RANGE, FB_E0_STAGE_ADDRESS, tcr);
+    u64 page = tg == 2 ? SZ_16K : SZ_4K;
+    d->flags = FB_E0_SNAPSHOT_VALID | FB_E0_REGIME_VALID;
+    d->saved_par = mrs(PAR_EL1); d->daif_before = mrs(DAIF);
+    msr_sync(DAIF, d->daif_before | 0x3c0);
+    d->flags |= FB_E0_DAIF_TOUCHED;
+    for (u64 p = ALIGN_DOWN(base + (u64)y0 * stride, page);
+         p < base + ((u64)y0 + 180) * stride; p += page) {
+        __asm__ volatile("at s1e2w, %0; isb" :: "r"(p) : "memory");
+        d->flags |= FB_E0_PAR_TOUCHED;
+        u64 par = mrs(PAR_EL1);
+        enum fb_e0_reason reason = FB_E0_OK;
+        if (par & PAR_F) reason = FB_E0_TRANSLATION;
+        else if ((par & PAR_PA) != p) reason = FB_E0_IDENTITY;
+#ifdef SIXBOOT_E0_FB_SMOKE
+        struct fb_e0_translation sample = {.va = p, .par = par,
+            .isar1 = mrs(ID_AA64ISAR1_EL1), .page_shift = 14, .status = FB_E0_WALK_PA};
+        if (!reason) {
+            mmu_e0_snapshot(p, par, &sample);
+            if (sample.status != FB_E0_WALK_OK) {
+                reason = FB_E0_REGIME;
+                d->detail = sample.status;
+            } else {
+                sample.attribute = fb_e0_attribute(par, (unsigned)sample.resolved_mair, sample.isar1);
+                /* Keep /vram NC: see the AMCC SLC directory handoff constraint
+                 * in memory.c. Do not turn a reported NC page into WB. */
+                if (!sample.attribute && sample.resolved_mair == 0xff)
+                    sample.attribute = FB_E0_ATTR_WB_SCANOUT;
+                if (sample.attribute) reason = FB_E0_ATTRIBUTE;
+            }
+        }
+        unsigned samples = d->translation.samples + 1;
+        if (samples == 1 || reason) d->translation = sample;
+        d->translation.samples = samples;
+        d->translation.last_va = p;
+#else
+        else if ((par >> 56) != 0x44 && (par >> 56) != 0xff) reason = FB_E0_ATTRIBUTE;
+#endif
+        if (reason) {
+            d->reason = reason;
+            d->stage = reason == FB_E0_REGIME ? FB_E0_STAGE_REGIME : FB_E0_STAGE_TRANSLATE;
+            if (reason != FB_E0_REGIME) {
+                d->failed_va = p; d->raw_par = par;
+                d->flags |= FB_E0_VA_VALID | FB_E0_PAR_VALID;
+            }
+            break;
+        }
+    }
+    msr_sync(PAR_EL1, d->saved_par);
+    d->restored_par = mrs(PAR_EL1);
+    if (d->restored_par != d->saved_par) {
+        d->flags |= FB_E0_UNSAFE;
+        if (!d->reason) { d->reason = FB_E0_PAR_RESTORE; d->stage = FB_E0_STAGE_RESTORE; }
+    }
+    if (!d->reason) {
+        /* The existing iodev lock protects shared font/shadow use against
+         * console writers. Mode reconfiguration remains boot-CPU serialized. */
+        if (console.initialized) iodev_lock(IODEV_FB);
+        d->flags |= FB_E0_DRAW_STARTED;
+        /* A raw pixel test can use the existing standard font before fb_init.
+         * Preserve the real console's font/background in both paths. */
+        __typeof__(console.font) saved_font = console.font;
+        rgb_t saved_bg = bt_bg;
+        console.font.ptr = _binary_build_font_bin_start;
+        console.font.width = 8; console.font.height = 16;
+        const rgb_t dark = {16, 24, 32}, inactive = {45, 55, 65};
+        const rgb_t active = {32, 125, 215}, white = {240, 245, 250};
+        bt_bg = dark;
+        bt_fill(x0, y0, 400, 180, dark);
+        for (unsigned w = 0; w < 2; w++) {
+            u32 x = x0 + 40 + w * 180;
+            bt_fill(x, y0 + 12, 140, 100, w == world ? active : inactive);
+            bt_bg = w == world ? active : inactive;
+            bt_text(x + 58, y0 + 37, w ? "B" : "A", 3, white);
+        }
+        bt_bg = dark;
+        const char *label = state == FB_E0_PASS ? "PASS" : state == FB_E0_FAIL ? "FAIL" :
+                            state == FB_E0_SMOKE ? "SMOKE / NO STAGE-2" : "RUNNING";
+        rgb_t color = state == FB_E0_FAIL ? (rgb_t){240, 75, 70} :
+                      state == FB_E0_PASS ? (rgb_t){75, 230, 130} : (rgb_t){240, 195, 70};
+        bt_text(x0 + 40, y0 + 140, label, 2, color);
+        console.font = saved_font; bt_bg = saved_bg;
+        for (u32 y = y0; y < y0 + 180; y++) {
+            u64 start = ALIGN_DOWN(base + (u64)y * stride + x0 * 4, line);
+            u64 end = ALIGN_UP(base + (u64)y * stride + ((u64)x0 + 400) * 4, line);
+            dc_cvac_range((void *)start, end - start);
+        }
+        sysop("dsb sy");
+        if (console.initialized) iodev_unlock(IODEV_FB);
+        d->stage = FB_E0_STAGE_DRAW;
+    }
+    msr_sync(DAIF, d->daif_before);
+    d->daif_after = mrs(DAIF);
+    if (d->daif_after != d->daif_before) {
+        d->flags |= FB_E0_UNSAFE;
+        if (!d->reason) { d->reason = FB_E0_DAIF_RESTORE; d->stage = FB_E0_STAGE_RESTORE; }
+    }
+    return d->reason;
+#undef REFUSE
+}
+#endif

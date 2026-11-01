@@ -1,0 +1,19 @@
+{
+  "scope": "Historical unmodified QEMU v1 records; host RAM pixel tests, no physical J713 visibility or Stage2 proof.",
+  "fixtures": [
+    {
+      "file": "legacy-smoke30-v1.bin",
+      "build_id": "c2f604c9f063340b",
+      "depth": 30,
+      "sha256": "afcc9400a810bb81019a6ed38ed247451e5d9f4481d452329ccd9d2d9ac0c123",
+      "source": "J713-FB-SMOKE-VERIFY-20261031/smoke30/qemu/smoke.bin"
+    },
+    {
+      "file": "legacy-smoke32-v1.bin",
+      "build_id": "496be05475106a9a",
+      "depth": 32,
+      "sha256": "1023daefb97e4c8ec0fc6263413203f8a9adaa25ce19bc28632eb8d5202dc27b",
+      "source": "J713-FB-SMOKE-VERIFY-20261031/smoke32/qemu/smoke.bin"
+    }
+  ]
+}

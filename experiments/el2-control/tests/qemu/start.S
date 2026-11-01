@@ -30,13 +30,39 @@ _start:
     ldr x2, =test_l3
     orr x3, x2, #3
     str x3, [x1, #256]
+#ifdef E2_TEST_FB_NC
+    /* The smoke inspector requires the real mapper's Outer Shareable leaves. */
+    ldr x0, =0x40000603
+#else
     ldr x0, =0x40000703
+#endif
     mov x3, #2048
     mov x4, #0x4000
 2:  str x0, [x2], #8
     add x0, x0, x4
     subs x3, x3, #1
     b.ne 2b
+#ifdef E2_TEST_FB_ATTR
+    /* Change only emulator-owned pixels before enabling translation. Host
+     * code, stacks and table reads keep slot 0's NC/NC attributes. */
+    ldr x3, =native_smoke_pixels
+    ldr x4, =native_smoke_pixel_bytes
+    ldr x4, [x4]
+    add x4, x3, x4
+    sub x4, x4, #1
+    lsr x4, x4, #14
+    lsr x3, x3, #14
+    ldr x2, =test_l3
+    mov x5, #0x40000000
+    lsr x5, x5, #14
+3:  sub x6, x3, x5
+    ldr x0, [x2, x6, lsl #3]
+    orr x0, x0, #4
+    str x0, [x2, x6, lsl #3]
+    add x3, x3, #1
+    cmp x3, x4
+    b.ls 3b
+#endif
     ldr x2, =test_l1
     orr x3, x1, #3
     str x3, [x2]
@@ -44,7 +70,15 @@ _start:
     orr x3, x2, #3
     str x3, [x1]
 #endif
+#ifdef E2_TEST_FB_NC
+#ifdef E2_TEST_FB_ATTR
+    ldr x0, =(0x44 | (E2_TEST_FB_ATTR << 8))
+#else
+    mov x0, #0x44
+#endif
+#else
     mov x0, #0xff
+#endif
     msr MAIR_EL2, x0
 #ifdef E2_TEST_NATIVE
     ldr x0, =0x2009cb510

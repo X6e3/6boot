@@ -12,6 +12,7 @@
 #include "string.h"
 #include "utils.h"
 #include "xnuboot.h"
+#include "../build/build_cfg.h"
 
 #define PAGE_SIZE       get_page_size()
 #define CACHE_LINE_SIZE 64
@@ -174,6 +175,85 @@ enum SPRR_val_t {
 #define MAIR_ATTR_DEVICE_GRE     0x0cUL
 
 static u64 *mmu_pt_L0;
+
+#ifdef SIXBOOT_E0_FB_SMOKE
+/* Inspect this mapper's own 16 KiB host tables. Never use the allocating
+ * mmu_pt_get_l* helpers here. The caller owns PAR and masks DAIF throughout.
+ * Every descriptor read is bounded RAM, then checked with hardware AT first. */
+void mmu_e0_snapshot(u64 va, u64 par, struct fb_e0_translation *t)
+{
+    /* DS=0, IPS<=48 bits below: extended/LPA2 output bits are not accepted. */
+    const u64 mask = GENMASK(47, 14);
+    t->va = va; t->par = par; t->page_shift = 14;
+    t->isar1 = mrs(ID_AA64ISAR1_EL1);
+    t->mmfr3 = mrs(S3_0_C0_C7_3);
+    t->pfr0 = mrs(ID_AA64PFR0_EL1);
+    t->flags = FB_E0_XLAT_MMFR3;
+    t->mair_alias = mrs(MAIR_EL1);
+    t->status = FB_E0_WALK_REGIME;
+    if ((t->mmfr3 & 15) == 1) {
+        /* SCR_EL3.TCR2En can trap even a supported TCR2 access. Without
+         * EL3 there is no such owner; otherwise leave that access UNKNOWN. */
+        if ((t->pfr0 >> 12) & 15) return;
+        t->tcr2 = mrs(S3_4_C2_C0_3);
+        t->flags |= FB_E0_XLAT_TCR2;
+    }
+    u64 tcr = mrs(TCR_EL2), mair = mrs(MAIR_EL2);
+    if (FIELD_GET(TCR_TG0, tcr) != TCR_TG0_16K ||
+        FIELD_GET(TCR_T0SZ, tcr) != 16 || FIELD_GET(TCR_IPS, tcr) > 5 ||
+        (tcr & (TCR_DS | TCR_HA | TCR_HD | TCR_EPD0 | TCR_TBI0)) ||
+        (t->mmfr3 & 15) > 1 || ((t->isar1 >> 56) & 15) > 1 || t->tcr2 || t->mair_alias != mair)
+        return;
+    t->root = mrs(TTBR0_EL2);
+    t->status = FB_E0_WALK_ROOT;
+    if (!mmu_pt_L0 || t->root != (u64)mmu_pt_L0 || (t->root & ~mask))
+        return;
+    u64 table = t->root;
+    const unsigned shifts[] = {47, 36, 25, 14};
+    const u64 fb_start = cur_boot_args.video.base;
+    const u64 fb_end = fb_start + cur_boot_args.video.stride * cur_boot_args.video.height;
+    for (unsigned level = 0; level < 4; level++) {
+        t->level = level;
+        t->status = FB_E0_WALK_BOUNDS;
+        if (!table || (table & (SZ_16K - 1)) || table > UINT64_MAX - SZ_16K ||
+            cur_boot_args.mem_size > UINT64_MAX - cur_boot_args.phys_base ||
+            table < cur_boot_args.phys_base ||
+            table + SZ_16K > cur_boot_args.phys_base + cur_boot_args.mem_size ||
+            !is_heap((void *)table) || !is_heap((void *)(table + SZ_16K - 1)) ||
+            (table < fb_end && fb_start < table + SZ_16K))
+            return;
+        u64 slot = table + ((va >> shifts[level]) & (level ? 2047u : 1u)) * 8;
+        __asm__ volatile("at s1e2r, %0; isb" :: "r"(slot) : "memory");
+        u64 readback = mrs(PAR_EL1);
+        t->status = FB_E0_WALK_READ;
+        if ((readback & PAR_F) || ((readback & PAR_PA) | (slot & 0xfff)) != slot ||
+            fb_e0_attribute(readback, (unsigned)(readback >> 56), t->isar1))
+            return;
+        u64 desc = *(volatile const u64 *)slot;
+        t->descriptors[level] = desc;
+        t->status = FB_E0_WALK_DESCRIPTOR;
+        if (!(desc & PTE_VALID)) return;
+        if (level < 3 && (desc & 3) == 3) {
+            if (desc & ~(mask | 3)) return;
+            table = desc & mask;
+            continue;
+        }
+        if (level < 2 || (level == 3 && (desc & 3) != 3) ||
+            (desc & ~(mask | UINT64_C(0xfff) | PTE_PXN | PTE_UXN)) ||
+            (desc & mask & MASK(shifts[level])) ||
+            !(desc & PTE_ACCESS) || (desc & PTE_AP_RO) ||
+            FIELD_GET(GENMASK(9, 8), desc) != 2)
+            return;
+        t->pa = (desc & mask) | (va & MASK(shifts[level]));
+        t->resolved_mair = (mair >> (((desc >> 2) & 7) * 8)) & 255;
+        t->status = FB_E0_WALK_PA;
+        if (t->pa != va || (par & PAR_PA) != (t->pa & ~UINT64_C(0xfff))) return;
+        t->flags |= FB_E0_XLAT_VALID;
+        t->status = FB_E0_WALK_OK;
+        return;
+    }
+}
+#endif
 
 static u64 *mmu_pt_get_l1(u64 from)
 {

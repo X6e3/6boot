@@ -22,9 +22,6 @@
 #include "utils.h"
 #include "xnuboot.h"
 #include "../build/build_cfg.h"
-#ifdef SIXBOOT_EL2_NATIVE
-#include "el2_native.h"
-#endif
 
 #include "../build/entry_probe_image.h"
 
@@ -51,25 +48,45 @@ static void put64(u8 *p, u64 v)
     put32(p + 4, v >> 32);
 }
 
-static void entry_probe_record(void *dt, const u8 *context, const u8 *result, u32 ret, u64 ticks,
+static void entry_probe_clear_dt(void *dt, int node)
+{
+    static const char *const props[] = {
+        "6boot,p3-context",
+        "6boot,p3-result",
+        "6boot,p3-return",
+        "6boot,p3-ticks",
+        "6boot,p3-load-address",
+        "6boot,p3-image-sha256",
+    };
+
+    for (size_t i = 0; i < sizeof(props) / sizeof(props[0]); i++)
+        fdt_delprop(dt, node, props[i]);
+}
+
+static int entry_probe_record(void *dt, const u8 *context, const u8 *result, u32 ret, u64 ticks,
                       u64 load)
 {
     int node = fdt_path_offset(dt, "/chosen");
 
     if (node < 0) {
         printf("6boot P3: no /chosen in the DT, result not recorded\n");
-        return;
+        return node;
     }
-    if (fdt_setprop(dt, node, "6boot,p3-context", context, P3_CONTEXT_SIZE) ||
-        fdt_setprop(dt, node, "6boot,p3-result", result, P3_RESULT_SIZE) ||
-        fdt_setprop_u32(dt, node, "6boot,p3-return", ret) ||
-        fdt_setprop_u64(dt, node, "6boot,p3-ticks", ticks) ||
-        fdt_setprop_u64(dt, node, "6boot,p3-load-address", load) ||
-        fdt_setprop_string(dt, node, "6boot,p3-image-sha256", entry_probe_image_sha256))
-        printf("6boot P3: failed to record the result in the DT\n");
+    entry_probe_clear_dt(dt, node);
+    int error;
+    if ((error = fdt_setprop(dt, node, "6boot,p3-context", context, P3_CONTEXT_SIZE)) ||
+        (error = fdt_setprop_u32(dt, node, "6boot,p3-return", ret)) ||
+        (error = fdt_setprop_u64(dt, node, "6boot,p3-ticks", ticks)) ||
+        (error = fdt_setprop_u64(dt, node, "6boot,p3-load-address", load)) ||
+        (error = fdt_setprop_string(dt, node, "6boot,p3-image-sha256", entry_probe_image_sha256)) ||
+        (error = fdt_setprop(dt, node, "6boot,p3-result", result, P3_RESULT_SIZE))) {
+        entry_probe_clear_dt(dt, node);
+        return error;
+    }
+    return 0;
 }
 
-int entry_probe_run(void *dt)
+int entry_probe_run(void *dt, struct entry_probe_outcome *outcome)
 {
     u8 context[P3_CONTEXT_SIZE];
     u8 result[P3_RESULT_SIZE];
@@ -77,6 +94,9 @@ int entry_probe_run(void *dt)
     u64 daif, t0, t1;
     u8 *image;
     int ret;
+    struct entry_probe_outcome local = {.context_ok = 1, .publication_error = -FDT_ERR_BADSTATE};
+    if (!outcome) outcome = &local;
+    *outcome = local;
 
     if (sizeof(entry_probe_image) > P3_STACK_OFFSET) {
         printf("6boot P3: image text 0x%lx overlaps its stack\n", sizeof(entry_probe_image));
@@ -119,21 +139,28 @@ int entry_probe_run(void *dt)
     __asm__ volatile("mrs %0, daif" : "=r"(daif));
     __asm__ volatile("msr daifset, #0xf" ::: "memory");
     __asm__ volatile("isb; mrs %0, cntpct_el0" : "=r"(t0)::"memory");
+    outcome->called = 1;
     ret = ((p3_entry_t)image)(context, sizeof(context), result, sizeof(result));
     __asm__ volatile("isb; mrs %0, cntpct_el0" : "=r"(t1)::"memory");
     __asm__ volatile("msr daif, %0" ::"r"(daif) : "memory");
+
+    outcome->context_ok = mrs(DAIF) == daif;
+    if (!outcome->context_ok) {
+        __asm__ volatile("msr daifset, #0xf; isb" ::: "memory");
+        return -1;
+    }
 
     printf("6boot P3: entry returned %d; result magic 0x%x status %u EL 0x%x MPIDR 0x%x, "
            "%lu ticks\n",
            ret, *(u32 *)result, *(u32 *)(result + 12), *(u32 *)(result + 16),
            *(u32 *)(result + 20), t1 - t0);
 
-    entry_probe_record(dt, context, result, (u32)ret, t1 - t0, (u64)image);
+    outcome->valid = !ret && *(u32 *)result == 0x58505242 &&
+        *(u32 *)(result + 4) == 1 && *(u32 *)(result + 8) == P3_RESULT_SIZE &&
+        *(u32 *)(result + 12) == 0 && *(u32 *)(result + 28) == 1;
+    outcome->publication_error = entry_probe_record(dt, context, result, (u32)ret, t1 - t0, (u64)image);
+    if (outcome->publication_error)
+        printf("6boot P3: evidence publication failed (%d)\n", outcome->publication_error);
     free(image);
-#ifdef SIXBOOT_EL2_NATIVE
-    if(ret || *(u32 *)result!=0x58505242 || *(u32 *)(result+12)!=0)
-        return -1;
-    return el2_native_run(dt);
-#endif
     return ret;
 }
