@@ -170,6 +170,10 @@ e2_guest_identity_check:
     str x10, [x9, #ES_OLD_ELR12]
     mrs x10, SPSR_EL12
     str x10, [x9, #ES_OLD_SPSR12]
+    mrs x10, ESR_EL12
+    str x10, [x9, #ES_OLD_ESR12]
+    mrs x10, FAR_EL12
+    str x10, [x9, #ES_OLD_FAR12]
     orr x13, x13, #E2_GF_EL12_SAVED
     str x13, [x9, #ES_GUEST_FLAGS]
     /* With stage 1 off the guest fetches non-cacheable: clean to PoC first. */
@@ -306,6 +310,8 @@ e2_restore_hcr_write:
     E2_RESTORE_GUEST VBAR_EL12, ES_OLD_VBAR12
     E2_RESTORE_GUEST ELR_EL12, ES_OLD_ELR12
     E2_RESTORE_GUEST SPSR_EL12, ES_OLD_SPSR12
+    E2_RESTORE_GUEST ESR_EL12, ES_OLD_ESR12
+    E2_RESTORE_GUEST FAR_EL12, ES_OLD_FAR12
     E2_RESTORE_GUEST SP_EL1, ES_SP_EL1
 .Lguest_restore_done:
     /* AT updates PAR even when translation fails. Restore it before VBAR;

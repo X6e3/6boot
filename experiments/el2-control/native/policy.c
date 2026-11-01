@@ -34,7 +34,7 @@ int en_result(unsigned mode,const struct en_call *c,const uint8_t *r,size_t n)
         return EN_FATAL;
     if(c->ret>=E2_ARGUMENT&&c->ret<=E2_CAPACITY) return EN_REFUSED;
     if(mode==EN_PREFLIGHT) {
-        if(n<E2_RESULT_SIZE||en_get(r,4)!=E2_RESULT_MAGIC||en_get(r+4,2)!=E2_VERSION||
+        if(n<E2_RESULT_SIZE||en_get(r,4)!=E2_RESULT_MAGIC||en_get(r+4,2)!=E2_RESULT_VERSION||
            en_get(r+6,2)!=E2_RESULT_SIZE) return EN_FAILED;
         return c->ret==E2_READY&&en_get(r+8,4)==E2_READY&&en_get(r+12,4)==3 ? EN_PASS:EN_FAILED;
     }
@@ -56,11 +56,11 @@ void en_record(uint8_t out[EN_RECORD_BYTES],unsigned mode,unsigned status,unsign
                const struct en_call *c)
 {
     for(unsigned i=0;i<EN_RECORD_BYTES;i++) out[i]=0;
-    en_put(out,0x45324e41,4); en_put(out+4,1,2); en_put(out+6,EN_RECORD_BYTES,2);
+    en_put(out,0x45324e41,4); en_put(out+4,EN_RECORD_VERSION,2); en_put(out+6,EN_RECORD_BYTES,2);
     en_put(out+8,mode,4); en_put(out+12,status,4); en_put(out+16,called,4);
     en_put(out+24,c->flags,8); en_put(out+32,c->ret,8);
-    for(unsigned i=0;i<24;i++) { en_put(out+64+8*i,c->before[i],8); en_put(out+256+8*i,c->after[i],8); }
-    for(unsigned i=0;i<12;i++) en_put(out+448+8*i,c->gpr[i],8);
+    for(unsigned i=0;i<EN_SYSTEM_COUNT;i++) { en_put(out+64+8*i,c->before[i],8); en_put(out+64+EN_AFTER+8*i,c->after[i],8); }
+    for(unsigned i=0;i<12;i++) en_put(out+64+EN_GPR+8*i,c->gpr[i],8);
     const uint64_t tail[]={c->observed_sp,c->expected_sp,c->ret,c->original_sp,c->flags,c->original_daif};
-    for(unsigned i=0;i<6;i++) en_put(out+544+8*i,tail[i],8);
+    for(unsigned i=0;i<6;i++) en_put(out+64+EN_OBS_SP+8*i,tail[i],8);
 }

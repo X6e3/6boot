@@ -24,16 +24,20 @@ el2_native_invoke:
     isb
     mov sp,x5
     str x5,[x17,#EN_EXPECT_SP]
-.macro EN_SNAPSHOT bias
+.macro EN_SNAPSHOT
     .irp reg,VBAR_EL2,HCR_EL2,ELR_EL2,SPSR_EL2,ESR_EL2,FAR_EL2,SP_EL0,SP_EL1,SCTLR_EL12,VBAR_EL12,ELR_EL12,SPSR_EL12,PAR_EL1,DAIF,SPSel,PAN,SCTLR_EL2,TCR_EL2,TTBR0_EL2,TTBR1_EL2,MAIR_EL2,MPIDR_EL1,CurrentEL
         mrs x9,\reg
         str x9,[x10],#8
     .endr
     mov x9,sp
-    str x9,[x10]
+    str x9,[x10],#8
+    .irp reg,ESR_EL12,FAR_EL12
+        mrs x9,\reg
+        str x9,[x10],#8
+    .endr
 .endm
     mov x10,x17
-    EN_SNAPSHOT 0
+    EN_SNAPSHOT
     mov x16,x0
     mov x0,x1
     mov x1,x2
@@ -45,6 +49,7 @@ el2_native_invoke:
     blr x16
     adrp x17,el2_native_call_state
     add x17,x17,:lo12:el2_native_call_state
+    mov w0,w0 /* int return: discard unspecified upper bits. */
     str x0,[x17,#EN_RET]
     stp x18,x19,[x17,#EN_GPR]
     stp x20,x21,[x17,#(EN_GPR+16)]
@@ -55,9 +60,9 @@ el2_native_invoke:
     mov x9,sp
     str x9,[x17,#EN_OBS_SP]
     add x10,x17,#EN_AFTER
-    EN_SNAPSHOT EN_AFTER
+    EN_SNAPSHOT
     mov x16,#EN_RETURNED
-    mov x12,#24
+    mov x12,#EN_SYSTEM_COUNT
     mov x13,x17
     add x14,x17,#EN_AFTER
 .Lcompare_state:
@@ -89,15 +94,15 @@ el2_native_invoke:
 .Lsp_done:
     /* Restore PAN before diagnostics even on CONTEXT_LOST. Do not retry a
      * failed HCR/EL12 restore outside the module's vector environment. */
-    ldr x9,[x17,#120]
+    ldr x9,[x17,#EN_PAN_OFFSET]
     msr PAN,x9
     isb
     cmp x16,#15
     b.ne .Lkeep_masked
-    ldr x0,[x17,#EN_RET]
-    cmp x0,#E2_CONTEXT_LOST
+    ldr w0,[x17,#EN_RET]
+    cmp w0,#E2_CONTEXT_LOST
     b.eq .Lkeep_masked
-    cmp x0,#E2_RESTORE_FAILED
+    cmp w0,#E2_RESTORE_FAILED
     b.eq .Lkeep_masked
     ldr x10,[x17,#EN_ORIG_DAIF]
     msr DAIF,x10
@@ -111,7 +116,7 @@ el2_native_invoke:
     msr DAIFSet,#0xf
 .Lreturn:
     str x16,[x17,#EN_FLAGS]
-    ldr x0,[x17,#EN_RET]
+    ldr w0,[x17,#EN_RET]
     ldr x9,[x17,#EN_ORIG_SP]
     mov sp,x9
     ldp x18,x19,[sp]

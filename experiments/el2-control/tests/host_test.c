@@ -58,6 +58,8 @@ static void fixture(void)
         .sp_el0 = 0x12345000, .vbar_el2 = TEST_BASE - 0x8000,
         .hcr_el2 = E2_HCR_E2H | E2_HCR_TGE | E2_HCR_RW,
         .daif = E2_DAIF_MASK, .mpidr_el1 = UINT64_C(0x80000000),
+        .mmfr0_el1 = UINT64_C(0x123456789abcdef0), .mmfr1_el1 = 0x123,
+        .mmfr2_el1 = 0x456, .pfr0_el1 = 0x789,
     };
 }
 static void guards(void)
@@ -77,11 +79,13 @@ static void expect_size(int expected, size_t size, uint64_t load)
     CHECK(memcmp(before, request, sizeof(request)) == 0);
     guards();
     CHECK(get32(output + 8) == E2_RESULT_MAGIC);
-    CHECK(get32(output + 12) == (E2_RESULT_SIZE << 16 | E2_VERSION));
+    CHECK(get32(output + 12) == (E2_RESULT_SIZE << 16 | E2_RESULT_VERSION));
     CHECK(get32(output + 16) == (uint32_t)expected);
     CHECK(get32(output + 20) == (E2_RESULT_PREFLIGHT_ONLY |
           (expected == E2_READY ? E2_RESULT_LAYOUT_VALID : 0)));
-    for (unsigned i = 96; i < E2_RESULT_SIZE; i++) CHECK(output[8 + i] == 0);
+    for (unsigned i = 96; i < 128; i++) CHECK(output[8 + i] == 0);
+    const uint64_t features[] = {snapshot.mmfr0_el1, snapshot.mmfr1_el1, snapshot.mmfr2_el1, snapshot.pfr0_el1};
+    for (unsigned i = 0; i < 4; i++) CHECK(get64(output + 8 + 128 + 8u*i) == features[i]);
     if (expected != E2_READY) {
         CHECK(get64(output + 88) == 0);
         CHECK(get64(output + 96) == 0);
@@ -103,27 +107,27 @@ static void valid_record(void)
 static void invalid_arguments(void)
 {
     fixture(); memset(output, 0xa5, sizeof(output));
-    CHECK(e2_foundation_run(NULL, 112, output + 8, 128, &snapshot, TEST_BASE) == E2_ARGUMENT);
-    CHECK(e2_foundation_run(request, 112, NULL, 128, &snapshot, TEST_BASE) == E2_ARGUMENT);
-    CHECK(e2_foundation_run(request, 112, output + 8, 127, &snapshot, TEST_BASE) == E2_ARGUMENT);
-    CHECK(e2_foundation_run(request, 112, output + 8, 128, NULL, TEST_BASE) == E2_ARGUMENT);
-    CHECK(e2_foundation_run((void *)(UINTPTR_MAX - 4), 16, output + 8, 128,
+    CHECK(e2_foundation_run(NULL, 112, output + 8, E2_RESULT_SIZE, &snapshot, TEST_BASE) == E2_ARGUMENT);
+    CHECK(e2_foundation_run(request, 112, NULL, E2_RESULT_SIZE, &snapshot, TEST_BASE) == E2_ARGUMENT);
+    CHECK(e2_foundation_run(request, 112, output + 8, E2_RESULT_SIZE - 1, &snapshot, TEST_BASE) == E2_ARGUMENT);
+    CHECK(e2_foundation_run(request, 112, output + 8, E2_RESULT_SIZE, NULL, TEST_BASE) == E2_ARGUMENT);
+    CHECK(e2_foundation_run((void *)(UINTPTR_MAX - 4), 16, output + 8, E2_RESULT_SIZE,
                             &snapshot, TEST_BASE) == E2_ARGUMENT);
-    CHECK(e2_foundation_run(request, 112, (void *)(UINTPTR_MAX - 64), 128,
+    CHECK(e2_foundation_run(request, 112, (void *)(UINTPTR_MAX - 64), E2_RESULT_SIZE,
                             &snapshot, TEST_BASE) == E2_ARGUMENT);
-    CHECK(e2_foundation_run(request, 112, output + 8, 128,
+    CHECK(e2_foundation_run(request, 112, output + 8, E2_RESULT_SIZE,
           (const struct e2_snapshot *)((const uint8_t *)&snapshot + 1), TEST_BASE) == E2_ARGUMENT);
-    CHECK(e2_foundation_run(request, 112, output + 8, 128, &snapshot, 0) == E2_ARGUMENT);
-    CHECK(e2_foundation_run(request, 112, output + 8, 128, &snapshot, TEST_BASE + 1) == E2_ARGUMENT);
-    CHECK(e2_foundation_run(request, 112, output + 8, 128, &snapshot,
+    CHECK(e2_foundation_run(request, 112, output + 8, E2_RESULT_SIZE, &snapshot, 0) == E2_ARGUMENT);
+    CHECK(e2_foundation_run(request, 112, output + 8, E2_RESULT_SIZE, &snapshot, TEST_BASE + 1) == E2_ARGUMENT);
+    CHECK(e2_foundation_run(request, 112, output + 8, E2_RESULT_SIZE, &snapshot,
                             UINT64_C(0xffffffffffff0000)) == E2_ARGUMENT);
     for (size_t i = 0; i < sizeof(output); i++) CHECK(output[i] == 0xa5);
     uint8_t before[sizeof(request)]; memcpy(before, request, sizeof(request));
-    CHECK(e2_foundation_run(request, 112, request, 128, &snapshot, TEST_BASE) == E2_ARGUMENT);
-    CHECK(e2_foundation_run(request, 112, request + 111, 128, &snapshot, TEST_BASE) == E2_ARGUMENT);
+    CHECK(e2_foundation_run(request, 112, request, E2_RESULT_SIZE, &snapshot, TEST_BASE) == E2_ARGUMENT);
+    CHECK(e2_foundation_run(request, 112, request + 111, E2_RESULT_SIZE, &snapshot, TEST_BASE) == E2_ARGUMENT);
     CHECK(memcmp(before, request, sizeof(request)) == 0);
     struct e2_snapshot old = snapshot;
-    CHECK(e2_foundation_run(request, 112, &snapshot, 128, &snapshot, TEST_BASE) == E2_ARGUMENT);
+    CHECK(e2_foundation_run(request, 112, &snapshot, E2_RESULT_SIZE, &snapshot, TEST_BASE) == E2_ARGUMENT);
     CHECK(memcmp(&old, &snapshot, sizeof(old)) == 0);
 }
 static void caller_frame_aliases(void)
@@ -144,7 +148,7 @@ static void caller_frame_aliases(void)
     }
     CHECK(e2_buffers_check(request, 112, memory + 2048, 2048, 2048,
                            &snapshot, TEST_BASE) == E2_READY);
-    CHECK(e2_buffers_check(request, 112, memory + 1808, 128, 128,
+    CHECK(e2_buffers_check(request, 112, memory + 1936 - E2_RESULT_SIZE, E2_RESULT_SIZE, E2_RESULT_SIZE,
                            &snapshot, TEST_BASE) == E2_READY);
     fixture(); snapshot.active_sp = (uintptr_t)request + 112;
     CHECK(e2_buffers_check(request, 112, output, sizeof(output), E2_RESULT_SIZE,
@@ -251,12 +255,12 @@ static void buffer_inside_arena(void)
      * report into a write into the real code, state, stack or trace pages. */
     for (unsigned i = 0; i < 8; i++) {
         uint8_t *inside = owned + (size_t)i * E2_PAGE_SIZE;
-        CHECK(e2_foundation_run(request, 112, inside, 128, &snapshot, base) == E2_ARGUMENT);
+        CHECK(e2_foundation_run(request, 112, inside, E2_RESULT_SIZE, &snapshot, base) == E2_ARGUMENT);
         for (unsigned j = 0; j < E2_RESULT_SIZE; j++) CHECK(inside[j] == 0xa5);
     }
     memcpy(owned + E2_GUEST_OFFSET, request, 112);
     memset(output, 0xa5, sizeof(output));
-    CHECK(e2_foundation_run(owned + E2_GUEST_OFFSET, 112, output + 8, 128,
+    CHECK(e2_foundation_run(owned + E2_GUEST_OFFSET, 112, output + 8, E2_RESULT_SIZE,
                             &snapshot, base) == E2_ARGUMENT);
     for (size_t i = 0; i < sizeof(output); i++) CHECK(output[i] == 0xa5);
     free(allocation);
@@ -265,10 +269,10 @@ static void unaligned_buffers(void)
 {
     fixture(); uint8_t unaligned[E2_REQUEST_MAX + 1];
     memcpy(unaligned + 1, request, 112); memset(output, 0xa5, sizeof(output));
-    CHECK(e2_foundation_run(unaligned + 1, 112, output + 1, 128,
+    CHECK(e2_foundation_run(unaligned + 1, 112, output + 1, E2_RESULT_SIZE,
                             &snapshot, TEST_BASE) == E2_READY);
     CHECK(get32(output + 1) == E2_RESULT_MAGIC);
-    CHECK(output[0] == 0xa5 && output[129] == 0xa5);
+    CHECK(output[0] == 0xa5 && output[1 + E2_RESULT_SIZE] == 0xa5);
 }
 static void derived_layout(void)
 {
@@ -325,7 +329,7 @@ static void bounded_parser_mutations(void)
         request[at] ^= (uint8_t)((seed >> 16) | 1u);
         uint8_t before[sizeof(request)]; memcpy(before, request, sizeof(request));
         memset(output, 0xa5, sizeof(output));
-        int status = e2_foundation_run(request, 112, output + 8, 128, &snapshot, TEST_BASE);
+        int status = e2_foundation_run(request, 112, output + 8, E2_RESULT_SIZE, &snapshot, TEST_BASE);
         CHECK(status >= E2_READY && status <= E2_CAPACITY && status != E2_ARGUMENT);
         CHECK(get32(output + 16) == (uint32_t)status);
         CHECK(memcmp(before, request, sizeof(request)) == 0);

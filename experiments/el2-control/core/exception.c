@@ -211,8 +211,8 @@ int e2_exception_encode(void *result, size_t capacity,
                                   t->frame[0].status != E2_EXPECTED))
         status = E2_RESTORE_FAILED;
     if (t->count > E2_EXCEPTION_CAPACITY) status = E2_TRACE_FULL;
-    /* The guest stage only claims DONE with the exact three-frame history
-     * BRK, probe HVC, DONE HVC and a complete restore. */
+    /* The guest stage only claims DONE with the exact four-frame history
+     * BRK, probe HVC, signature HVC, DONE HVC and a complete restore. */
     uint32_t guest = s->guest_status >= E2_UNEXPECTED && s->guest_status <= E2_GUEST_SIGNATURE ?
                      (uint32_t)s->guest_status : E2_GUEST_UNEXPECTED;
     if (!s->guest_requested) guest = E2_GUEST_NOT_RUN;
@@ -239,7 +239,7 @@ int e2_exception_encode(void *result, size_t capacity,
         s->last_vector, s->active, s->depth, s->old_sp_el1,
         /* Guest stage, reported separately from the BRK stage above. */
         s->guest_requested, guest, s->guest_verdict, s->hvc_count, s->guest_flags,
-        s->guest_hcr, s->pre_brk_sp, s->old_sctlr12, s->signature_seen};
+        s->guest_hcr, s->pre_brk_sp, s->old_sctlr12, s->signature_seen, s->old_esr12, s->old_far12};
     _Static_assert(32 + 8 * sizeof(header) / sizeof(header[0]) <= E2_EXCEPTION_HEADER_SIZE,
                    "result header fits");
     for (unsigned i = 0; i < sizeof(header) / sizeof(header[0]); i++) put64(p + 32 + 8u * i, header[i]);

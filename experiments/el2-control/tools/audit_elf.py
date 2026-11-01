@@ -17,6 +17,17 @@ def require(condition, message):
         raise SystemExit("ELF audit failed: " + message)
 
 
+def dis_operands(op, args):
+    # GNU/LLVM print load/store offsets in decimal/hex respectively.
+    if op.startswith(("ld", "st")):
+        args = re.sub(r"#(-?0x[0-9a-f]+)", lambda m: "#"+str(int(m[1],16)), args)
+    if op in {"tbz", "tbnz"}:
+        args = re.sub(r"#0x([0-9a-f]+)", lambda m: "#"+str(int(m[1],16)), args)
+    if op.startswith("b") or op in {"cbz", "cbnz", "tbz", "tbnz"}:
+        args = re.sub(r"(?<![#\w])0x([0-9a-f]+)(?=\s|$)", r"\1", args)
+    return args
+
+
 def audit(elf_path, binary_path, disassembly_path, stack_path):
     data = elf_path.read_bytes()
 
@@ -92,10 +103,10 @@ def audit(elf_path, binary_path, disassembly_path, stack_path):
     }
     for name, value in expected.items():
         require(symbols.get(name) == value, "layout symbol " + name)
-    require(symbols.get("e2_result_version") == 2, "result ABI version")
+    require(symbols.get("e2_result_version") == 3, "result ABI version")
     require(0 < symbols.get("sixboot_el2_exception_entry", 0) < 0x4000,
             "separate exception entry")
-    require(symbols.get("e2_exception_session") == 0x4040 and
+    require(symbols.get("e2_exception_session") == 0x4060 and
             symbols.get("e2_exception_trace") == 0x14000, "exception state placement")
     vectors = named.get(".vectors")
     require(vectors is not None and vectors[3] % 0x800 == 0 and vectors[5] == 0x800,
@@ -129,7 +140,8 @@ def audit(elf_path, binary_path, disassembly_path, stack_path):
         match = re.match(r"\s*[0-9a-f]+:\s+[0-9a-f]{8}\s+([a-z][a-z0-9_.]*)\s*(.*)", line)
         if match:
             address = int(line.split(":", 1)[0], 16)
-            instructions.append((address, match[1].lower(), match[2].lower()))
+            op={"b.lo":"b.cc", "b.hs":"b.cs"}.get(match[1].lower(),match[1].lower())
+            instructions.append((address, op, dis_operands(op, match[2].lower())))
     require(len(instructions) > 30, "empty/unrecognized disassembly")
     # HVC, DC and IC exist only in the reviewed guest stage; checked by place below.
     forbidden = {"eretaa", "eretab", "smc", "svc",
@@ -140,8 +152,8 @@ def audit(elf_path, binary_path, disassembly_path, stack_path):
     for address, mnemonic, operands in instructions:
         require(mnemonic not in forbidden, "unexpected state mutation/transition: " + mnemonic)
         if guest_lo <= address < guest_hi:
-            require(mnemonic in {"mov", "cmp", "b", "b.ne", "hvc", "nop"},
-                    "guest must remain register-only: " + mnemonic)
+            require(mnemonic in {"mov", "cmp", "b", "b.ne", "hvc", "nop", "msr"},
+                    "unreviewed guest instruction: " + mnemonic)
         if mnemonic == "hvc":
             require(guest_lo <= address < guest_hi, "HVC outside the EL1 guest")
         if mnemonic == "at":
@@ -159,8 +171,13 @@ def audit(elf_path, binary_path, disassembly_path, stack_path):
         if mnemonic == "msr":
             target = operands.split(",")[0].strip()
             require(target in {"vbar_el2", "daif", "daifset", "elr_el2", "spsr_el2", "esr_el2", "far_el2",
-                               "hcr_el2", "sctlr_el12", "vbar_el12", "elr_el12", "spsr_el12", "sp_el1", "par_el1"},
+                               "hcr_el2", "sctlr_el12", "vbar_el12", "elr_el12", "spsr_el12", "sp_el1", "par_el1", "esr_el12", "far_el12", "esr_el1", "far_el1"},
                     "unreviewed system-register write: " + target)
+            if target in {"esr_el1", "far_el1"}:
+                expected = symbols["e2_guest_payload"] + (0 if target == "esr_el1" else 4)
+                require(address == expected and operands == target + ", xzr", "EL1 fault-bank test outside guest prefix")
+            if target in {"esr_el12", "far_el12"}:
+                require(symbols["e2_exception_restore"] <= address < symbols["e2_exception_run"] + symbol_sizes["e2_exception_run"], "EL12 fault-bank write outside restore")
             if target == "hcr_el2":
                 require(address in {symbols["e2_guest_hcr_write"], symbols["e2_restore_hcr_write"]},
                         "HCR_EL2 write outside the reviewed sites")
@@ -170,10 +187,11 @@ def audit(elf_path, binary_path, disassembly_path, stack_path):
     reads = {operands.split(",")[-1].strip() for _, mnemonic, operands in instructions if mnemonic == "mrs"}
     require(reads == {"currentel", "daif", "spsel", "sp_el0", "sp_el1", "vbar_el2", "hcr_el2",
                       "mpidr_el1", "elr_el2", "spsr_el2", "esr_el2", "far_el2",
-                      "sctlr_el12", "vbar_el12", "elr_el12", "spsr_el12", "ctr_el0", "par_el1"},
+                      "sctlr_el12", "vbar_el12", "elr_el12", "spsr_el12", "ctr_el0", "par_el1", "esr_el12", "far_el12",
+                      "id_aa64mmfr0_el1", "id_aa64mmfr1_el1", "id_aa64mmfr2_el1", "id_aa64pfr0_el1"},
             "unexpected snapshot register set: " + repr(reads))
     require(writes == {"vbar_el2", "daif", "daifset", "elr_el2", "spsr_el2", "esr_el2", "far_el2",
-                       "hcr_el2", "sctlr_el12", "vbar_el12", "elr_el12", "spsr_el12", "sp_el1", "par_el1"},
+                       "hcr_el2", "sctlr_el12", "vbar_el12", "elr_el12", "spsr_el12", "sp_el1", "par_el1", "esr_el12", "far_el12", "esr_el1", "far_el1"},
             "missing restore writes")
 
     def body(name):
@@ -213,7 +231,7 @@ def audit(elf_path, binary_path, disassembly_path, stack_path):
         ("cmp", "x12, #0x70"), ("b.cc", f"{env:x}"), ("sub", "x13, x12, #0x70"),
         ("adds", "x14, x0, x1"), ("b.cs", f"{arg:x}"), ("cmp", "x0, x12"),
         ("b.cs", f"{guard + 48:x}"), ("cmp", "x14, x13"), ("b.hi", f"{arg:x}"),
-        ("mov", "x15, #0x80"), ("cbz", f"w17, {guard + 60:x}"), ("mov", "x15, #0x800"),
+        ("mov", "x15, #0xa0"), ("cbz", f"w17, {guard + 60:x}"), ("mov", "x15, #0x800"),
         ("adds", "x14, x2, x15"), ("b.cs", f"{arg:x}"), ("cmp", "x2, x12"),
         ("b.cs", f"{save:x}"), ("cmp", "x14, x13"), ("b.hi", f"{arg:x}"),
     ]
@@ -279,8 +297,9 @@ def audit(elf_path, binary_path, disassembly_path, stack_path):
             at(check_sp + 12) == ("mov", "x11, sp") and at(check_sp + 16) == ("cmp", "x10, x11") and
             at(check_sp + 20)[0] == "b.ne", "BRK runtime SP comparison")
     require(at(guest_eret) == ("eret", ""), "guest entry ERET")
-    require(at(guest_eret - 16)[0] == "adr" and
-            f"{symbols['e2_guest_payload']:x} <e2_guest_payload>" in at(guest_eret - 16)[1] and
+    payload_adr=re.match(r"x10, (?:0x)?([0-9a-f]+)\b",at(guest_eret - 16)[1])
+    require(at(guest_eret - 16)[0] == "adr" and payload_adr is not None and
+            int(payload_adr[1],16) == symbols["e2_guest_payload"] and
             at(guest_eret - 12) == ("msr", "elr_el2, x10") and
             at(guest_eret - 8) == ("mov", "x10, #0x3c5") and
             at(guest_eret - 4) == ("msr", "spsr_el2, x10"),
@@ -332,7 +351,7 @@ def audit(elf_path, binary_path, disassembly_path, stack_path):
     restore = [(a, op, args) for a, op, args in body("e2_exception_run")
                if a >= symbols["e2_exception_restore"]]
     for reg, offset in {"vbar_el2": 0, "elr_el2": 16, "spsr_el2": 24,
-                        "esr_el2": 32, "far_el2": 40, "daif": 8}.items():
+                        "esr_el2": 32, "far_el2": 40, "esr_el12": 336, "far_el12": 344, "daif": 8}.items():
         sites = [i for i, (_, op, args) in enumerate(restore)
                  if op == "msr" and args == reg + ", x10"]
         require(len(sites) == 1 and sites[0] > 0, "missing exact restore for " + reg)

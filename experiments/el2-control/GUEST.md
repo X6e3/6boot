@@ -58,7 +58,7 @@ execution environment. QEMU has no Apple GXF model.
 
 ## Result ABI
 
-Request and preflight result remain v1. E2EX result is now **v2**, 2048 LE bytes;
+Request remains v1; preflight result is v2/160. E2EX is **v3**, 2048 LE bytes;
 the new trace/overflow semantics must not be read as the old reserved-zero ABI.
 The initial 184 bytes retain their existing fields. Word at offset 8 describes
 the EL2 session contract; frame 0 retains the raw BRK result. A restore failure
@@ -75,15 +75,16 @@ may make the session status 19 even when frame 0 says BRK passed.
 | 232 | pre-BRK SP |
 | 240 | saved SCTLR_EL12 |
 | 248 | signature_seen |
+| 256 / 264 | saved ESR_EL12 / FAR_EL12 |
 
 Flags: INSTALLED=1, RESTORED=2, EXPECTED=4, GUEST_DONE=8, SIGNATURE=16.
 DONE requires the exact four-frame history, three accepted HVCs, verdict zero,
 matching flags and complete restore. Normal guest return is 22, flags 0x1f,
 frame count 4, restore mask 0x3ff. Guest status is separate from the raw BRK frame.
 
-Four normal frames occupy 256..1791. On overflow the frames are preserved,
+Four normal frames occupy 272..1807. On overflow the frames are preserved,
 dropped saturates, and the last omitted syndrome is kept in a fixed summary.
-At 1792: u32 E2OF magic 0x45324f46; u16 version 1 / u16 size 64; six u64 fields
+At 1856: u32 E2OF magic 0x45324f46; u16 version 1 / u16 size 64; six u64 fields
 at +8..+48: ESR, ELR, SPSR, FAR, vector, validity flags. Remaining bytes zero.
 The summary is absent when dropped=0. A raw FAR is meaningful only with FAR_VALID.
 It is not a complete fifth GPR frame.
@@ -91,7 +92,7 @@ It is not a complete fifth GPR frame.
 Guest statuses: 21 probe observed; 22 DONE; 23 mismatch; 24 HCR refused;
 25 not run; 26 unexpected; 27 nonidentity; 28 intermediate handshake.
 Common failures 14..20 are retained, including TRACE_FULL and CONTEXT_LOST.
-The native session is 336 bytes. Leaf dispatcher currently uses 32 stack bytes
+The native session is 352 bytes. Leaf dispatcher currently uses 32 stack bytes
 inside its audited 1024-byte budget; zero stack use is no longer claimed.
 
 ## Evidence
@@ -108,3 +109,7 @@ On 29 October 2026 the guest entry ran on J713 through the native adapter and
 returned 22: the four-frame history above, verdict zero, three HVCs and
 restore mask 0x3ff. That run had GXF off and Stage-2 translation off. See
 J713.md.
+
+The guest explicitly clears ESR_EL1/FAR_EL1 before its register pattern.
+Both banks are saved/restored through the EL12 accessors. E2EX v2 retained its
+256-byte header and overflow at 1792; the collector selects by version.

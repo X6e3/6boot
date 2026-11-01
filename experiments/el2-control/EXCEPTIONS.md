@@ -29,7 +29,7 @@ its AAPCS/platform callee state, while exception entry preserves all x0–x30.
 
 ## Two distinct callable entries
 
-- sixboot_el2_entry: unchanged preflight semantics, 128-byte result.
+- sixboot_el2_entry: unchanged preflight semantics, 160-byte result.
 - sixboot_el2_exception_entry: same PREFLIGHT request, but requires a complete
   2048-byte result span before installing any vectors. Preflight failures
   return the original error semantics; check return status first.
@@ -49,7 +49,7 @@ the complete P3 stack allocation must still be checked by a future loader.
 
 ## Memory and stack bounds
 
-The 128 KiB layout remains unchanged. Snapshot and 336-byte session are in
+The 128 KiB layout remains unchanged. Snapshot and 352-byte session are in
 the state page; the exception trace is at offset 0x14000. The experiment's
 stack is its own 16 KiB range [base+0x8000, base+0xc000), not P3's 16 KiB stack.
 No physical address is selected here, and no SP_EL2 MRS is attempted.
@@ -144,7 +144,7 @@ inside the reserved 16 KiB page. No overwrite on overflow, dynamic allocation
 or unbounded search. Incomplete stack failures use status/last-vector in the
 session rather than fabricating a complete frame.
 
-Exception result ABI v2 is 2048 LE bytes (preflight/request ABI is still v1):
+Exception result ABI v3 is 2048 LE bytes (preflight v2/160, request v1):
 
 | Offset | Field |
 | --- | --- |
@@ -156,8 +156,9 @@ Exception result ABI v2 is 2048 LE bytes (preflight/request ABI is still v1):
 | 112..176 | u64 private call SP, host SPSR, expected/resume/abort PCs, last vector, active, depth, old SP_EL1 |
 | 184..247 | guest request/status/verdict/count/flags/HCR/pre-BRK SP/old SCTLR; see GUEST.md |
 | 248 | u64 signature_seen |
-| 256..1791 | up to four LE frames |
-| 1792..1855 | optional E2OF v1 overflow summary, otherwise zero |
+| 256 / 264 | saved ESR_EL12 / FAR_EL12 |
+| 272..1807 | up to four LE frames |
+| 1856..1919 | optional E2OF v1 overflow summary, otherwise zero |
 | remainder | zero |
 
 Restore mask: VBAR=1, DAIF=2, ELR=4, SPSR=8, ESR=16, FAR=32,

@@ -158,7 +158,7 @@ int e2_foundation_run(const void *request, size_t size,
     uint8_t *out = result;
     for (unsigned i = 0; i < E2_RESULT_SIZE; i++) out[i] = 0;
     put32(out, E2_RESULT_MAGIC);
-    put32(out + 4, E2_RESULT_SIZE << 16 | E2_VERSION);
+    put32(out + 4, E2_RESULT_SIZE << 16 | E2_RESULT_VERSION);
     put32(out + 8, (uint32_t)status);
     put32(out + 12, E2_RESULT_PREFLIGHT_ONLY |
           (status == E2_READY ? E2_RESULT_LAYOUT_VALID : 0));
@@ -170,6 +170,10 @@ int e2_foundation_run(const void *request, size_t size,
     put64(out + 56, s->hcr_el2);
     put64(out + 64, s->daif);
     put64(out + 72, s->mpidr_el1);
+    put64(out + 128, s->mmfr0_el1);
+    put64(out + 136, s->mmfr1_el1);
+    put64(out + 144, s->mmfr2_el1);
+    put64(out + 152, s->pfr0_el1);
     if (status == E2_READY) {
         put64(out + 80, get64(p + 32));
         put64(out + 88, get64(p + 40));

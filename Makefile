@@ -69,7 +69,7 @@ CFLAGS := $(BASE_CFLAGS) -mgeneral-regs-only
 
 CFG :=
 ifeq ($(RELEASE),1)
-CFG += RELEASE
+override CFG += RELEASE
 endif
 
 ifeq ($(NO_DISPLAY),1)
@@ -202,6 +202,7 @@ BUILD_OBJS := $(patsubst %,build/%,$(OBJECTS))
 BUILD_FP_OBJS := $(patsubst %,build/%,$(FP_OBJECTS))
 BUILD_RUST_LIB := $(patsubst %,build/%,$(RUST_LIB))
 BUILD_ALL_OBJS := $(BUILD_OBJS) $(BUILD_FP_OBJS) $(BUILD_RUST_LIB)
+
 NAME := m1n1
 TARGET := m1n1.macho
 TARGET_RAW := m1n1.bin
@@ -210,6 +211,10 @@ DEPDIR := build/.deps
 
 .PHONY: all clean format invoke_cc always_rebuild
 all: build/$(TARGET) build/$(TARGET_RAW)
+
+# All compilation paths include generated configuration, including assembly.
+$(BUILD_ALL_OBJS): build/build_cfg.h build/build_tag.h
+
 
 # These objects and the generated image header are used only by a separately
 # built development image with CFG=SIXBOOT_EL2_NATIVE.
@@ -235,7 +240,7 @@ rustfmt:
 rustfmt-check:
 	cd rust && cargo fmt --check
 
-build/$(RUST_LIB): src/../build/build_cfg.h rust/src/*.rs rust/src/gpu/*.rs rust/src/gpu/hw/*.rs rust/Cargo.toml rust/Cargo.lock
+build/$(RUST_LIB): build/build_cfg.h rust/src/*.rs rust/src/gpu/*.rs rust/src/gpu/hw/*.rs rust/Cargo.toml rust/Cargo.lock
 	$(QUIET)echo "  RS    $@"
 	$(QUIET)mkdir -p $(DEPDIR)
 	$(QUIET)mkdir -p "$(dir $@)"
@@ -254,7 +259,7 @@ $(BUILD_FP_OBJS): build/%.o: src/%.c
 	$(QUIET)mkdir -p "$(dir $@)"
 	$(QUIET)$(CC) -c $(BASE_CFLAGS) -MMD -MF $(DEPDIR)/$(*F).d -MQ "$@" -MP -o $@ $<
 
-build/%.o: src/%.c build-tag build-cfg
+build/%.o: src/%.c
 	$(QUIET)echo "  CC    $@"
 	$(QUIET)mkdir -p $(DEPDIR)
 	$(QUIET)mkdir -p "$(dir $@)"
@@ -291,14 +296,16 @@ build/$(NAME).bin: build/$(NAME)-asahi.bin build/$(LOGO).logo
 	$(QUIET)cat $^ > $@
 endif
 
-.INTERMEDIATE: build-tag build-cfg
-build-tag src/../build/build_tag.h &:
+.PHONY: build-tag build-cfg
+build-tag: build/build_tag.h
+build-cfg: build/build_cfg.h
+build/build_tag.h: always_rebuild
 	$(QUIET)mkdir -p build
 	$(QUIET)./version.sh > build/build_tag.tmp
 	$(QUIET)cmp -s build/build_tag.h build/build_tag.tmp 2>/dev/null || \
 	( mv -f build/build_tag.tmp build/build_tag.h && echo "  TAG   build/build_tag.h" )
 
-build-cfg src/../build/build_cfg.h &:
+build/build_cfg.h: always_rebuild
 	$(QUIET)mkdir -p build
 	$(QUIET)for i in $(CFG); do echo "#define $$i"; done > build/build_cfg.tmp
 	$(QUIET)cmp -s build/build_cfg.h build/build_cfg.tmp 2>/dev/null || \

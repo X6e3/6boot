@@ -46,23 +46,25 @@ static void admission(void)
     en_put(r+32,E2_R_ALL&~E2_R_GUEST,8);CHECK(en_result(EN_GUEST,&c,r,sizeof(r))==EN_FATAL);
     wire(r,EN_GUEST);c.ret=E2_GUEST_DONE;en_put(r+4,1,2);CHECK(en_result(EN_GUEST,&c,r,sizeof(r))==EN_FATAL);
     wire(r,EN_BRK);c.ret=E2_EXPECTED;CHECK(en_result(EN_BRK,&c,r,sizeof(r))==EN_PASS);
+    memset(r,0,sizeof(r));CHECK(en_result(EN_BRK,&c,r,sizeof(r))==EN_FATAL);
+    CHECK(en_result(EN_BRK,&c,r,0)==EN_FATAL);
     c.ret=E2_ENVIRONMENT;memset(r,0xa5,sizeof(r));CHECK(en_result(EN_GUEST,&c,r,sizeof(r))==EN_REFUSED);
-    memset(r,0,sizeof(r));en_put(r,E2_RESULT_MAGIC,4);en_put(r+4,E2_VERSION,2);en_put(r+6,E2_RESULT_SIZE,2);en_put(r+12,3,4);
+    memset(r,0,sizeof(r));en_put(r,E2_RESULT_MAGIC,4);en_put(r+4,E2_RESULT_VERSION,2);en_put(r+6,E2_RESULT_SIZE,2);en_put(r+12,3,4);
     c.ret=0;CHECK(en_result(EN_PREFLIGHT,&c,r,sizeof(r))==EN_PASS);
     en_put(r+8,E2_RANGE,4);CHECK(en_result(EN_PREFLIGHT,&c,r,sizeof(r))==EN_FAILED);
 }
 static void encoding(void)
 {
     uint8_t out[EN_RECORD_BYTES+2];memset(out,0xa5,sizeof(out));struct en_call c={0};
-    for(unsigned i=0;i<24;i++)c.before[i]=c.after[i]=0x12340000u+i;
+    for(unsigned i=0;i<EN_SYSTEM_COUNT;i++)c.before[i]=c.after[i]=0x12340000u+i;
     for(unsigned i=0;i<12;i++)c.gpr[i]=0x712u+i;
     c.ret=22;c.flags=EN_ALL;c.original_daif=0x80;c.observed_sp=c.expected_sp=0x4000;
     en_record(out+1,EN_GUEST,EN_PASS,1,&c);
     CHECK(out[0]==0xa5&&out[sizeof(out)-1]==0xa5);
     CHECK(en_get(out+1,4)==0x45324e41&&en_get(out+7,2)==EN_RECORD_BYTES);
     CHECK(en_get(out+1+16,4)==1&&en_get(out+1+24,8)==EN_ALL);
-    for(unsigned i=0;i<24;i++) CHECK(en_get(out+1+64+8*i,8)==c.before[i]&&en_get(out+1+256+8*i,8)==c.after[i]);
-    CHECK(en_get(out+1+584,8)==0x80);
+    for(unsigned i=0;i<EN_SYSTEM_COUNT;i++) CHECK(en_get(out+1+64+8*i,8)==c.before[i]&&en_get(out+1+64+EN_AFTER+8*i,8)==c.after[i]);
+    CHECK(en_get(out+1+64+EN_ORIG_DAIF,8)==0x80);
 }
 static void descriptors(void)
 {

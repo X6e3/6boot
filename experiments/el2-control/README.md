@@ -117,13 +117,16 @@ The new entry accepts only EL2h, fully masked DAIF, HCR E2H/TGE/RW set and VM
 clear, and the expected boot MPIDR. This deliberately narrows P3's EL1-or-EL2
 ABI. A different environment is refused, not silently reconfigured.
 
-## Result ABI v1
+## Result ABI v2
 
-128 LE bytes. Offset 0 is magic E2_RESULT_MAGIC; 4/6 are version/size; 8 is
+160 LE bytes. Offset 0 is magic E2_RESULT_MAGIC; 4/6 are version/size; 8 is
 status; 12 is flags (PREFLIGHT_ONLY always, LAYOUT_VALID on READY). Eight u64
 fields at 16..79 are CurrentEL, SPSel, original active SP (SP_EL2 with SPSel=1),
 SP_EL0, VBAR_EL2, HCR_EL2, DAIF and MPIDR_EL1. At 80/88 are the arena base/size
-only when READY. Bytes 96..127 are zero. No success flag denotes guest execution.
+only when READY. Bytes 96..127 are zero. Four raw feature registers follow at 128..159:
+ID_AA64MMFR0_EL1, ID_AA64MMFR1_EL1, ID_AA64MMFR2_EL1, ID_AA64PFR0_EL1.
+These are observations, not a capability verdict. Historical E2RS v1/128
+records remain readable by the collector; their feature fields are absent. No success flag denotes guest execution.
 
 ARGUMENT errors write no output, including buffers inside the actual image
 arena even when the request claims a different arena. Other C-core errors produce a result. Early
@@ -139,8 +142,8 @@ The separate exception entry uses the same request and a 2048-byte result;
 its success status is E2_EXPECTED (13), not READY. It also requires an exclusion
 range covering the caller frame in a stack of at least 16 KiB. Full result
 layout, error statuses and restoration limits are in EXCEPTIONS.md and GUEST.md.
-The exception result is now ABI v2 (2048 bytes); request and preflight result
-remain v1. A native adapter must reject an unexpected result version.
+The exception result is now ABI v3 (2048 bytes); request remains v1 and
+preflight result is v2/160. The collector also reads historical E2EX v2. A native adapter must reject an unexpected result version.
 
 The native adapter is described in NATIVE.md and its first J713 runs in
 J713.md. The guest path uses EL12 guest-bank accessors under inherited VHE;

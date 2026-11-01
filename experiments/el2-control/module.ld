@@ -17,13 +17,13 @@ SECTIONS {
     ASSERT((ADDR(.guest_text) & 0x7ff) == 0, "EL1 guest vector alignment")
     __e2_code_end = .;
     ASSERT(__e2_code_end <= 0x4000, "EL2 code exceeds one page")
-    .state 0x04000 (NOLOAD) : { *(.bss.e2_state) . = 0x4000; } :private
+    .state 0x04000 (NOLOAD) : { __e2_state_start = .; *(.bss.e2_state) . = __e2_state_start + 0x4000; } :private
     .stack 0x08000 (NOLOAD) : { *(.bss.e2_stack) } :private
     ASSERT(SIZEOF(.stack) == 0x4000, "EL2 stack size changed")
     .guest 0x0c000 (NOLOAD) : { __e2_guest = .; . += 0x4000; } :private
     .guest_stack 0x10000 (NOLOAD) : { __e2_guest_stack = .; . += 0x4000; } :private
     .trace 0x14000 (NOLOAD) : {
-        __e2_trace = .; KEEP(*(.bss.e2_exception_trace)) . = 0x4000;
+        __e2_trace = .; KEEP(*(.bss.e2_exception_trace)) . = __e2_trace + 0x4000;
     } :private
     .reserved 0x18000 (NOLOAD) : { . += 0x8000; } :private
     __e2_image_end = .;

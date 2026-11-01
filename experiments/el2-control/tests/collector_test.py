@@ -32,9 +32,11 @@ def fixture(e):
     prop('mode',mode.encode()+b'\0');prop('build-id',manifest['build_id'].encode()+b'\0');prop('module-sha256',manifest['module_sha256'].encode()+b'\0')
     for key,val in [('called',1),('adapter-status',0),('safe',1),('return',c.le(native,32)),('refusal-reason',0)]:be(key,val)
     be('load-address',arena,8);prop('native-state',native);prop('result',result)
-    top=c.le(native,552)
+    names,after_off,gpr_off,tail=c.native_layout(native)
+    top=c.le(native,tail+8)
+    # 592 is E2_REQUEST_MAX; observer is 528 (v1) or 560 (v2).
     spans=[(0x40400000,0x800000),(0x40400000,0x700000),(arena,0x30000),(arena,0x20000),(top-0x4000,0x4000),
-           (0x40400100,592),(0x40400400,2048),(0x40400d00,528),(0x41000000,0x100000),(0x40400000,0x800000)]
+           (0x40400100,592),(0x40400400,2048),(0x40400d00,len(native)-64),(0x41000000,0x100000),(0x40400000,0x800000)]
     o=bytearray(176);put(o,0,0x45324f57,4);put(o,4,1,2);put(o,6,176,2);put(o,8,10,4)
     for i,(start,size) in enumerate(spans):put(o,16+16*i,start);put(o,24+16*i,size)
     prop('ownership',bytes(o))
@@ -57,7 +59,19 @@ for e in json.loads(a.evidence.read_text()):
     r=evaluate(props)
     if r['verdict']!='PASS':raise AssertionError(mode+': '+json.dumps(r['errors']))
     check(r['verdict']=='PASS')
-    for key,off in [('native-state',64),('native-state',448),('native-state',552),('ownership',64),('mappings',32),('result',8)]:
+    bad=copy.deepcopy(props);b=bytearray(bad['6boot,el2-ownership'])
+    put(b,16+16*7+8,1);bad['6boot,el2-ownership']=bytes(b)
+    check(evaluate(bad)['verdict']=='FAIL')
+    if mode=='preflight':
+        data=props['6boot,el2-result']
+        if c.le(data,4,2)==2:
+            check(r['feature_registers']=={name:hex(c.le(data,128+8*i)) for i,name in enumerate(
+                ['ID_AA64MMFR0_EL1','ID_AA64MMFR1_EL1','ID_AA64MMFR2_EL1','ID_AA64PFR0_EL1'])})
+            for off,value in [(4,1),(6,128)]:
+                bad=copy.deepcopy(props);b=bytearray(data);put(b,off,value,2)
+                bad['6boot,el2-result']=bytes(b);check(evaluate(bad)['verdict']=='FAIL')
+
+    for key,off in [('native-state',64),('native-state',c.native_layout(props['6boot,el2-native-state'])[2]),('native-state',c.native_layout(props['6boot,el2-native-state'])[3]+8),('ownership',64),('mappings',32),('result',8)]:
         bad=copy.deepcopy(props);b=bytearray(bad['6boot,el2-'+key]);b[off]^=1;bad['6boot,el2-'+key]=bytes(b)
         check(evaluate(bad)['verdict']!='PASS')
     for key in ['native-state','result','ownership','mappings','request']:
@@ -68,7 +82,8 @@ for e in json.loads(a.evidence.read_text()):
     check(c.evaluate(props,manifest,'wrong',cmd)['verdict']!='PASS')
     check(c.evaluate(props,manifest,'7.1.13-x6e3-rel3',cmd+' x6e3.el2=wrong')['verdict']!='PASS')
     if mode!='preflight':
-        for off in [256,512,520,528,576,592,600,624]:
+        header=272 if c.le(props['6boot,el2-result'],4,2)==3 else 256
+        for off in [header,header+256,header+264,header+272,header+320,header+336,header+344,header+368]:
             bad=copy.deepcopy(props);b=bytearray(bad['6boot,el2-result']);b[off]^=1;bad['6boot,el2-result']=bytes(b);check(evaluate(bad)['verdict']!='PASS')
 
 with tempfile.TemporaryDirectory() as d:

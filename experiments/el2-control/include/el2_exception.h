@@ -46,10 +46,10 @@
 #define E2_HANDLER_C_BUDGET 1024
 #define E2_EXCEPTION_CAPACITY 4
 #define E2_EXCEPTION_RESULT_SIZE 2048
-#define E2_EXCEPTION_VERSION 2
-#define E2_EXCEPTION_HEADER_SIZE 256
+#define E2_EXCEPTION_VERSION 3
+#define E2_EXCEPTION_HEADER_SIZE 272
 #define E2_EXCEPTION_TRACE_BYTES 1600
-#define E2_OVERFLOW_OFFSET 1792
+#define E2_OVERFLOW_OFFSET 1856
 #define E2_OVERFLOW_SIZE 64
 
 /* Assembly frame offsets; x0..x30 occupy 0..247. */
@@ -113,7 +113,9 @@
 #define ES_SIGNATURE_SEEN 312
 #define ES_OLD_PAR 320
 #define ES_GUEST_SIGNATURE_PC 328
-#define E2_SESSION_SIZE 336
+#define ES_OLD_ESR12 336
+#define ES_OLD_FAR12 344
+#define E2_SESSION_SIZE 352
 
 #define E2_R_VBAR 1
 #define E2_R_DAIF 2
@@ -153,7 +155,7 @@ struct e2_exception_session {
     uint64_t guest_requested, guest_status, guest_hcr, old_sctlr12, old_vbar12;
     uint64_t old_elr12, old_spsr12, guest_probe_pc, guest_done_pc, guest_return_pc;
     uint64_t hvc_count, guest_flags, pre_brk_sp, guest_verdict, guest_active, signature_seen;
-    uint64_t old_par, guest_signature_pc;
+    uint64_t old_par, guest_signature_pc, old_esr12, old_far12;
 };
 struct e2_exception_trace {
     uint64_t count, dropped;
@@ -221,6 +223,10 @@ E2_ASSERT(e2_exception_session, guest_active, ES_GUEST_ACTIVE);
 E2_ASSERT(e2_exception_session, signature_seen, ES_SIGNATURE_SEEN);
 E2_ASSERT(e2_exception_session, old_par, ES_OLD_PAR);
 E2_ASSERT(e2_exception_session, guest_signature_pc, ES_GUEST_SIGNATURE_PC);
+E2_ASSERT(e2_exception_session, old_esr12, ES_OLD_ESR12);
+E2_ASSERT(e2_exception_session, old_far12, ES_OLD_FAR12);
+_Static_assert(E2_EXCEPTION_HEADER_SIZE + E2_EXCEPTION_CAPACITY * E2_FRAME_SIZE <= E2_OVERFLOW_OFFSET, "trace/overflow disjoint");
+_Static_assert(E2_OVERFLOW_OFFSET + E2_OVERFLOW_SIZE <= E2_EXCEPTION_RESULT_SIZE, "overflow fits");
 #undef E2_ASSERT
 _Static_assert(sizeof(struct e2_exception_frame) == E2_FRAME_SIZE, "frame ABI");
 _Static_assert(sizeof(struct e2_exception_session) == E2_SESSION_SIZE, "session ABI");

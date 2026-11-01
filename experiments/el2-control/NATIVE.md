@@ -77,9 +77,10 @@ needed.
 `el2_native_invoke()` first saves the caller's x18..x30 and frame base. It
 saves and masks DAIF and moves to the separate native stack. It fills
 x18..x29 with `0x712..0x71d` and then calls the module. On return it compares
-those 12 registers, SP and 24 context values: VBAR/HCR/ELR/SPSR/ESR/FAR_EL2,
+those 12 registers, SP and 26 context values: VBAR/HCR/ELR/SPSR/ESR/FAR_EL2,
 SP_EL0/SP_EL1, SCTLR/VBAR/ELR/SPSR_EL12, PAR, DAIF, SPSel, PAN,
-SCTLR/TCR/TTBR0/TTBR1/MAIR_EL2, MPIDR, CurrentEL and the private SP.
+SCTLR/TCR/TTBR0/TTBR1/MAIR_EL2, MPIDR, CurrentEL and the private SP, followed by ESR_EL12 and FAR_EL12.
+PAN remains element 15 (byte 120); the new banks are appended at 24/25.
 
 This does not claim to observe every architectural register the module
 leaves alone, or any microarchitectural state. No SIMD is used; these
@@ -110,13 +111,13 @@ below are little-endian.
 | Record | Size | Content |
 | --- | ---: | --- |
 | `6boot,el2-request` | variable, at most 592 | E2CT v1; the RAM list and two exclusions covering every address outside the arena |
-| `6boot,el2-result` | 128 / 2048 | preflight E2RS v1 or exception E2EX v2; copied bytes, not an arena pointer |
-| `6boot,el2-native-state` | 592 | E2NA v1; mode/status/called/flags/ret, 24 u64 before and after, 12 GPRs, stack/DAIF fields |
+| `6boot,el2-result` | 160 / 2048 | preflight E2RS v2 or exception E2EX v3; copied bytes, not an arena pointer |
+| `6boot,el2-native-state` | 624 | E2NA v2; mode/status/called/flags/ret, 26 u64 before and after, 12 GPRs, stack/DAIF fields |
 | `6boot,el2-ownership` | 176 | E2OW v1; loader/BSS/storage/arena/caller stack/request/result/observer/kernel/CTRR spans |
 | `6boot,el2-mappings` | 1056 | E2MP v1; read/write PAR before and after preparation for the 32 subpages |
 
-In E2NA, `before` is at offset 64, `after` at 256 and the GPRs at 448; the
-tail starts at 544: observed SP, expected SP, ret, the original **saved
+In E2NA, `before` is at offset 64, `after` at 272 and the GPRs at 480; the
+tail starts at 576: observed SP, expected SP, ret, the original **saved
 frame base**, flags and the original DAIF. The saved frame base is 112 bytes
 below the SP before the call.
 
@@ -158,3 +159,7 @@ byte for byte.
 The Arm break-before-make order and the descriptor reading follow the
 existing `src/memory.c`, `src/arm_cpu_regs.h` and [Arm AArch64 memory management, TLBs and Changing translations](https://documentation-service.arm.com/static/68e680a2587fd957f5efd742?token=).
 That reference describes the architecture; it is not a J713 verification.
+
+Legacy E2NA v1/592 (24 values), E2RS v1/128 and E2EX v2/2048 remain
+readable; old captures do not gain measurements they never recorded.
+The adapter preserves framebuffer activation, including FB_SILENT_MODE.

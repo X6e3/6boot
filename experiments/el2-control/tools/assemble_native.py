@@ -56,6 +56,7 @@ def main():
     assert image((inputs/'stage2-original.bin').read_bytes(),dtb,args)==original
     assert sha(original)=='30e56865cd1c38802be96969e83b27ba803af6506e17f69f892adf78486d21e1'
     a.out.mkdir(parents=True,exist_ok=False)
+    shutil.copytree(build/'source',a.out/'source',ignore=shutil.ignore_patterns('build','__pycache__','.git'))
     manifest=json.loads((build/'source-manifest.json').read_text())
     manifest.update({'rel3_reconstructed':True,'rel3_inputs':facts,'images':{},'cmdline_base':args})
     stage=(build/'m1n1-el2-native.bin').read_bytes()

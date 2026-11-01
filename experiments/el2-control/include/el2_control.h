@@ -36,10 +36,15 @@
 #define E2_SNAP_HCR 40
 #define E2_SNAP_DAIF 48
 #define E2_SNAP_MPIDR 56
-#define E2_SNAPSHOT_SIZE 64
+#define E2_SNAP_MMFR0 64
+#define E2_SNAP_MMFR1 72
+#define E2_SNAP_MMFR2 80
+#define E2_SNAP_PFR0 88
+#define E2_SNAPSHOT_SIZE 96
 #define E2_DAIF_MASK 0x3c0
 #define E2_CALL_FRAME_SIZE 112
-#define E2_RESULT_SIZE 128
+#define E2_RESULT_VERSION 2
+#define E2_RESULT_SIZE 160
 
 #ifndef __ASSEMBLER__
 #include <stddef.h>
@@ -68,6 +73,7 @@
 struct e2_snapshot {
     uint64_t current_el, spsel, active_sp, sp_el0;
     uint64_t vbar_el2, hcr_el2, daif, mpidr_el1;
+    uint64_t mmfr0_el1, mmfr1_el1, mmfr2_el1, pfr0_el1;
 };
 #define E2_OFFSET(field, offset) \
     _Static_assert(offsetof(struct e2_snapshot, field) == offset, "snapshot ABI: " #field)
@@ -79,6 +85,10 @@ E2_OFFSET(vbar_el2, E2_SNAP_VBAR);
 E2_OFFSET(hcr_el2, E2_SNAP_HCR);
 E2_OFFSET(daif, E2_SNAP_DAIF);
 E2_OFFSET(mpidr_el1, E2_SNAP_MPIDR);
+E2_OFFSET(mmfr0_el1, E2_SNAP_MMFR0);
+E2_OFFSET(mmfr1_el1, E2_SNAP_MMFR1);
+E2_OFFSET(mmfr2_el1, E2_SNAP_MMFR2);
+E2_OFFSET(pfr0_el1, E2_SNAP_PFR0);
 _Static_assert(sizeof(struct e2_snapshot) == E2_SNAPSHOT_SIZE, "snapshot size");
 #undef E2_OFFSET
 
@@ -98,7 +108,7 @@ int e2_layout_make(uint64_t arena, uint64_t size, struct e2_layout *out);
  * Snapshot is native/aligned. All supplied spans must already be accessible.
  * ARGUMENT returns without writing result, including request/result aliasing
  * the actual image arena (regardless of a forged declared arena).
- * Other returns encode 128 LE bytes.
+ * Other returns encode E2_RESULT_SIZE LE bytes.
  * Neither declared ranges nor addresses contained in them are dereferenced.
  * image_base comes from the actual entry, not from the untrusted request.
  * READY denotes validated preflight only; no EL1/exception experiment runs.

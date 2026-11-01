@@ -360,7 +360,7 @@ static void prepare_buffers_and_p3_stack(void)
 {
     uint8_t req[112] = {0}, output[E2_EXCEPTION_RESULT_SIZE + 128];
     struct e2_snapshot snap = {8, 1, BASE - 0x1000, 0, BASE - 0x8000,
-                              E2_HCR_E2H | E2_HCR_TGE | E2_HCR_RW, E2_DAIF_MASK, 0x80000000};
+                              E2_HCR_E2H | E2_HCR_TGE | E2_HCR_RW, E2_DAIF_MASK, 0x80000000, 0, 0, 0, 0};
     put32(req, E2_REQUEST_MAGIC); put32(req + 4, E2_HEADER_SIZE << 16 | E2_VERSION);
     put32(req + 8, sizeof(req)); put32(req + 12, E2_PREFLIGHT); put32(req + 16, E2_CHIP);
     req[20] = 'J'; req[21] = '7'; req[22] = '1'; req[23] = '3';

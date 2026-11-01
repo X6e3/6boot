@@ -8,6 +8,7 @@ CROSS_COMPILE ?= aarch64-elf-
 FW_LD ?= $(CROSS_COMPILE)ld
 OBJCOPY ?= $(CROSS_COMPILE)objcopy
 OBJDUMP ?= $(CROSS_COMPILE)objdump
+NM ?= $(CROSS_COMPILE)nm
 PYTHON ?= python3
 QEMU ?= qemu-system-aarch64
 QEMU_LIB_DIR ?=
@@ -35,7 +36,7 @@ $(BUILD)/host-test: core/control.c core/trace.c tests/host_test.c $(HEADERS) | $
 $(BUILD)/exception-test: core/control.c core/exception.c tests/exception_test.c $(HEADERS) | $(BUILD)
 	$(HOST_CC) $(HOSTFLAGS) core/control.c core/exception.c tests/exception_test.c -o $@
 $(BUILD)/native-test: native/policy.c native/fdt_memory.c native/native.h tests/native_test.c $(HEADERS) $(FDT_SRC) | $(BUILD)
-	$(HOST_CC) $(filter-out -Wconversion -Wshadow,$(HOSTFLAGS)) -include stdlib.h -I$(FDT_DIR) native/policy.c native/fdt_memory.c tests/native_test.c $(FDT_SRC) -o $@
+	$(HOST_CC) $(filter-out -Wconversion -Wshadow,$(HOSTFLAGS)) -D_POSIX_C_SOURCE=200809L -include stdlib.h -I$(FDT_DIR) native/policy.c native/fdt_memory.c tests/native_test.c $(FDT_SRC) -o $@
 test: $(BUILD)/host-test $(BUILD)/exception-test $(BUILD)/native-test
 	$(BUILD)/host-test
 	$(BUILD)/exception-test
@@ -55,7 +56,7 @@ $(BUILD)/trace.o: core/trace.c $(HEADERS) | $(BUILD)
 $(BUILD)/exception.o: core/exception.c $(HEADERS) | $(BUILD)
 	$(FW_CC) $(FWFLAGS) -c $< -o $@
 $(BUILD)/el2-foundation.elf: $(OBJECTS) module.ld
-	$(FW_LD) --no-undefined --fatal-warnings -z max-page-size=0x4000 \
+	$(FW_LD) --no-relax --no-undefined --fatal-warnings -z max-page-size=0x4000 \
 	  -T module.ld $(OBJECTS) -o $@
 $(BUILD)/el2-foundation.bin: $(BUILD)/el2-foundation.elf
 	$(OBJCOPY) -O binary $(CODE_SECTIONS) $< $@
@@ -66,27 +67,27 @@ audit: $(BUILD)/el2-foundation.elf $(BUILD)/el2-foundation.bin $(BUILD)/el2-foun
 	  $(BUILD)/el2-foundation.bin $(BUILD)/el2-foundation.dis $(BUILD)/exception.su
 firmware: audit
 audit-tests: audit
-	$(PYTHON) -I -B tools/test_audit.py $(BUILD) $(OBJCOPY) $(OBJDUMP) $(CROSS_COMPILE)nm
+	$(PYTHON) -I -B tools/test_audit.py $(BUILD) $(OBJCOPY) $(OBJDUMP) $(NM)
 qemu-test: firmware
 	$(PYTHON) -I -B tools/run_qemu.py --qemu "$(QEMU)" --qemu-lib-dir="$(QEMU_LIB_DIR)" --build "$(BUILD)" \
-	  --cc "$(FW_CC)" --target="$(FW_TARGET)" --ld "$(FW_LD)" --nm "$(CROSS_COMPILE)nm"
+	  --cc "$(FW_CC)" --target="$(FW_TARGET)" --ld "$(FW_LD)" --nm "$(NM)"
 qemu-matrix: qemu-test
 	$(PYTHON) -I -B tools/run_qemu.py --qemu "$(QEMU)" --qemu-lib-dir="$(QEMU_LIB_DIR)" --build "$(BUILD)" --fault setup \
-	  --cc "$(FW_CC)" --target="$(FW_TARGET)" --ld "$(FW_LD)" --nm "$(CROSS_COMPILE)nm"
+	  --cc "$(FW_CC)" --target="$(FW_TARGET)" --ld "$(FW_LD)" --nm "$(NM)"
 	$(PYTHON) -I -B tools/run_qemu.py --qemu "$(QEMU)" --qemu-lib-dir="$(QEMU_LIB_DIR)" --build "$(BUILD)" --fault hcr \
-	  --cc "$(FW_CC)" --target="$(FW_TARGET)" --ld "$(FW_LD)" --nm "$(CROSS_COMPILE)nm"
+	  --cc "$(FW_CC)" --target="$(FW_TARGET)" --ld "$(FW_LD)" --nm "$(NM)"
 	$(PYTHON) -I -B tools/run_qemu.py --qemu "$(QEMU)" --qemu-lib-dir="$(QEMU_LIB_DIR)" --build "$(BUILD)" --fault restore \
-	  --cc "$(FW_CC)" --target="$(FW_TARGET)" --ld "$(FW_LD)" --nm "$(CROSS_COMPILE)nm"
+	  --cc "$(FW_CC)" --target="$(FW_TARGET)" --ld "$(FW_LD)" --nm "$(NM)"
 	$(PYTHON) -I -B tools/run_qemu.py --qemu "$(QEMU)" --qemu-lib-dir="$(QEMU_LIB_DIR)" --build "$(BUILD)" --fault identity \
-	  --cc "$(FW_CC)" --target="$(FW_TARGET)" --ld "$(FW_LD)" --nm "$(CROSS_COMPILE)nm"
+	  --cc "$(FW_CC)" --target="$(FW_TARGET)" --ld "$(FW_LD)" --nm "$(NM)"
 	$(PYTHON) -I -B tools/run_qemu.py --qemu "$(QEMU)" --qemu-lib-dir="$(QEMU_LIB_DIR)" --build "$(BUILD)" --fault sp \
-	  --cc "$(FW_CC)" --target="$(FW_TARGET)" --ld "$(FW_LD)" --nm "$(CROSS_COMPILE)nm"
+	  --cc "$(FW_CC)" --target="$(FW_TARGET)" --ld "$(FW_LD)" --nm "$(NM)"
 	$(PYTHON) -I -B tools/run_qemu.py --qemu "$(QEMU)" --qemu-lib-dir="$(QEMU_LIB_DIR)" --build "$(BUILD)" --fault sequence \
-	  --cc "$(FW_CC)" --target="$(FW_TARGET)" --ld "$(FW_LD)" --nm "$(CROSS_COMPILE)nm"
+	  --cc "$(FW_CC)" --target="$(FW_TARGET)" --ld "$(FW_LD)" --nm "$(NM)"
 
 # The production native caller gate, exercised around the actual module blob.
 .PHONY: qemu-native-matrix
 qemu-native-matrix: firmware
 	@set -e; for fault in none setup hcr restore identity sp sequence; do \
-	  $(PYTHON) -I -B tools/run_qemu.py --native-gate --qemu "$(QEMU)" --qemu-lib-dir="$(QEMU_LIB_DIR)" --build "$(BUILD)" --fault $$fault --cc "$(FW_CC)" --target="$(FW_TARGET)" --ld "$(FW_LD)" --nm "$(CROSS_COMPILE)nm"; \
+	  $(PYTHON) -I -B tools/run_qemu.py --native-gate --qemu "$(QEMU)" --qemu-lib-dir="$(QEMU_LIB_DIR)" --build "$(BUILD)" --fault $$fault --cc "$(FW_CC)" --target="$(FW_TARGET)" --ld "$(FW_LD)" --nm "$(NM)"; \
 	done

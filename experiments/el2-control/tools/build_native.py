@@ -5,7 +5,7 @@
 Never installs, boots, mounts an ESP or modifies the input checkout.
 Dependencies are supplied by the caller; no automatic toolchain installation.
 """
-import argparse,hashlib,json,os,shutil,subprocess
+import argparse,hashlib,json,os,shutil,subprocess,shlex
 from pathlib import Path
 
 p=argparse.ArgumentParser()
@@ -15,6 +15,7 @@ p.add_argument('--cc',default='clang --target=aarch64-none-elf')
 p.add_argument('--ld',default='aarch64-elf-ld')
 p.add_argument('--objcopy',default='aarch64-elf-objcopy')
 p.add_argument('--nm',default='aarch64-elf-nm')
+p.add_argument('--objdump',default='aarch64-elf-objdump')
 p.add_argument('--control',action='store_true',help='also build an ordinary non-experimental stage2')
 a=p.parse_args()
 repo=Path(__file__).resolve().parents[3]
@@ -34,7 +35,10 @@ def run(cmd,name,cwd=source,env=None):
         raise SystemExit('FAILED '+name+'\n'+'\n'.join(tail))
 
 module=source/'experiments/el2-control'
-run([a.make,'BUILD='+str(work/'module'),'all'],'module.log',module)
+cc=shlex.split(a.cc)
+run([a.make,'BUILD='+str(work/'module'),'FW_CC='+cc[0],
+     'FW_TARGET='+shlex.join(cc[1:]),'FW_LD='+a.ld,
+     'OBJCOPY='+a.objcopy,'OBJDUMP='+a.objdump,'NM='+a.nm,'all'],'module.log',module)
 probe=source/'entry-probe'
 run([a.make,'CC=clang','BUILD='+str(work/'probe'),'test'],'p3-host.log',probe)
 run([a.make,'CC='+a.cc,'LD='+a.ld,'BUILD='+str(work/'probe'),'firmware'],'p3-firmware.log',probe)

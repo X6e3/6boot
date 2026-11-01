@@ -71,6 +71,10 @@ _start:
     msr VBAR_EL12, x0
     ldr x0, =0x40081234
     msr ELR_EL12, x0
+    ldr x0, =0x96000045
+    msr ESR_EL12, x0
+    ldr x0, =0x41345670
+    msr FAR_EL12, x0
     mov x0, #0x3c5
     msr SPSR_EL12, x0
     ldr x0, =0x41000000
@@ -91,6 +95,12 @@ _start:
     bl test_main
     mov x0, #99
     b test_exit
+
+.global test_int_result
+test_int_result:
+    /* AAPCS64 int result: the upper 32 bits are not part of the value. */
+    movz x0, #0xabcd, lsl #48
+    ret
 
 .global test_call
 .type test_call,%function
@@ -113,8 +123,8 @@ test_call:
     mov x3, x4
 #endif
     adr x17, test_observed
-    mov x4, sp
-    str x4, [x17, #104]
+    mov x9, sp
+    str x9, [x17, #104]
     .irp n,18,19,20,21,22,23,24,25,26,27,28,29
         mov x\n, #(0x700 + \n)
     .endr

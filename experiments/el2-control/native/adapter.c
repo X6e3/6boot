@@ -129,7 +129,7 @@ int el2_native_run(void *dt)
     for(int i=0;i<MAX_CPUS;i++) {
         if(secondary_stacks[i]&&en_overlaps(region,(struct en_span){(uintptr_t)secondary_stacks[i],SECONDARY_STACK_SIZE})) {reason=5;goto finish;}
         if(i<MAX_EL3_CPUS&&secondary_stacks_el3[i]&&
-           en_overlaps(region,(struct en_span){(uintptr_t)secondary_stacks_el3[i],0x8000})) {reason=5;goto finish;}
+           en_overlaps(region,(struct en_span){(uintptr_t)secondary_stacks_el3[i],SECONDARY_STACK_SIZE})) {reason=5;goto finish;}
     }
     if(!mapped(arena,E2_ARENA_SIZE,0)) {reason=6;goto finish;}
     memset((void *)arena,0,E2_ARENA_SIZE);
@@ -164,7 +164,7 @@ int el2_native_run(void *dt)
 finish:
     if(reason) {status=blocked?EN_FATAL:EN_REFUSED;el2_native_call_state.ret=E2_ENVIRONMENT;}
     if(publish(dt,node,mode,status,called,arena,ticks,reason)) blocked=true;
-    fb_set_active(true);
+    /* Preserve the caller's framebuffer activation/silent state. */
     printf("6boot EL2_NATIVE END mode=%u adapter=%u called=%u ret=%lu safe=%u reason=%u outer=%lx ticks=%lu\n",
            mode,status,called,el2_native_call_state.ret,!blocked,reason,el2_native_call_state.flags,ticks);
     if(blocked) {next_stage.entry=NULL;printf("6boot EL2_NATIVE STOP: kernel handoff blocked; restore REL3 manually\n");return -1;}

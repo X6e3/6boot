@@ -46,17 +46,17 @@ static void put64(uint8_t *p, uint64_t v)
 static uint64_t get(const uint8_t *p, unsigned n)
 { uint64_t v=0; for(unsigned i=0;i<n;i++) v|=(uint64_t)p[i]<<(8*i); return v; }
 
-struct state { uint64_t value[16]; };
+struct state { uint64_t value[18]; };
 static const char *const names[] = {"VBAR_EL2", "DAIF", "HCR_EL2", "SP_EL0", "SP_EL1",
     "SCTLR_EL12", "VBAR_EL12", "ELR_EL12", "SPSR_EL12", "ELR_EL2", "SPSR_EL2",
-    "ESR_EL2", "FAR_EL2", "PAR_EL1", "SPSel", "PAN"};
+    "ESR_EL2", "FAR_EL2", "PAR_EL1", "SPSel", "PAN", "ESR_EL12", "FAR_EL12"};
 static void snapshot(struct state *s)
 {
 #define READ(i, reg) __asm__ volatile("mrs %0, " #reg : "=r"(s->value[i]))
     READ(0, VBAR_EL2); READ(1, DAIF); READ(2, HCR_EL2); READ(3, SP_EL0); READ(4, SP_EL1);
     READ(5, SCTLR_EL12); READ(6, VBAR_EL12); READ(7, ELR_EL12); READ(8, SPSR_EL12);
     READ(9, ELR_EL2); READ(10, SPSR_EL2); READ(11, ESR_EL2); READ(12, FAR_EL2);
-    READ(13, PAR_EL1); READ(14, SPSel); READ(15, PAN);
+    READ(13, PAR_EL1); READ(14, SPSel); READ(15, PAN); READ(16, ESR_EL12); READ(17, FAR_EL12);
 #undef READ
 }
 static unsigned one(const char *name, uint64_t offset, int wanted)
@@ -75,7 +75,7 @@ static unsigned one(const char *name, uint64_t offset, int wanted)
     }
     print("\n");
     if(ret!=wanted) errors++;
-    for(unsigned i=0;i<16;i++) if(before.value[i]!=after.value[i]) {
+    for(unsigned i=0;i<18;i++) if(before.value[i]!=after.value[i]) {
         print("CHANGED "); print(names[i]); print(" before="); hex(before.value[i]);
         print(" after="); hex(after.value[i]); print("\n");
         /* Restore-fault injection intentionally leaves guest/HCR/PAR state
@@ -102,6 +102,15 @@ static unsigned one(const char *name, uint64_t offset, int wanted)
             if(!E2_TEST_PARTIAL && (!(get(result+12,4)&E2_X_RESTORED) || get(result+32,8)!=E2_R_ALL)) errors++;
         } else if(get(result+8,4)!=E2_EXPECTED || get(result+32,8)!=E2_R_ALL) errors++;
     } else if(get(result,4)!=E2_RESULT_MAGIC || get(result+8,4)!=E2_READY || get(result+12,4)!=3) errors++;
+    if(!offset) {
+        uint64_t features[4];
+        __asm__ volatile("mrs %0, ID_AA64MMFR0_EL1" : "=r"(features[0]));
+        __asm__ volatile("mrs %0, ID_AA64MMFR1_EL1" : "=r"(features[1]));
+        __asm__ volatile("mrs %0, ID_AA64MMFR2_EL1" : "=r"(features[2]));
+        __asm__ volatile("mrs %0, ID_AA64PFR0_EL1" : "=r"(features[3]));
+        if(get(result+4,2)!=E2_RESULT_VERSION || get(result+6,2)!=E2_RESULT_SIZE) errors++;
+        for(unsigned i=0;i<4;i++) if(get(result+128+8*i,8)!=features[i]) errors++;
+    }
     if(wanted==E2_GUEST_DONE) {
         if(!(get(result+12,4)&E2_X_GUEST_DONE) || get(result+16,4)!=(E2_TEST_HAS_SIGNATURE ? 4u : 3u)) errors++;
         const unsigned states[]={E2_EXPECTED,E2_GUEST_HVC,E2_GUEST_SIGNATURE,E2_GUEST_DONE};
@@ -178,7 +187,19 @@ void test_main(void)
     /* Exercise mask restoration, rather than only the already-masked case. */
     __asm__ volatile("msr daifclr, #2; isb" ::: "memory");
 #endif
-    unsigned failed=one("preflight",0,E2_READY);
+    unsigned failed=0;
+#ifdef E2_TEST_NATIVE
+    extern void test_int_result(void);
+    int int_ret=test_call((uint64_t)test_int_result,request,sizeof(request),result,sizeof(result));
+    if(int_ret || el2_native_call_state.ret) failed++;
+    print(failed ? "INT_RETURN_FAIL\n" : "INT_RETURN_PASS\n");
+#endif
+    for(unsigned i=0;i<sizeof(result);i++) result[i]=0xa5;
+    int short_ret=test_call(ARENA,request,sizeof(request),result,E2_RESULT_SIZE-1);
+    if(short_ret!=E2_ARGUMENT) failed++;
+    for(unsigned i=0;i<sizeof(result);i++) if(result[i]!=0xa5) { failed++; break; }
+    print(failed ? "SHORT_CAPACITY_FAIL\n" : "SHORT_CAPACITY_PASS\n");
+    failed+=one("preflight",0,E2_READY);
     failed+=one("brk",E2_TEST_BRK_ENTRY,E2_TEST_BRK_EXPECTED);
     failed+=one("guest",E2_TEST_GUEST_ENTRY,E2_TEST_GUEST_EXPECTED);
     print(failed ? "QEMU_TCG_FAIL\n" : "QEMU_TCG_PASS\n");

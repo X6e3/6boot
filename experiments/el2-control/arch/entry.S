@@ -88,6 +88,14 @@ e2_save_caller_frame:
     str x10, [x4, #E2_SNAP_DAIF]
     mrs x12, MPIDR_EL1
     str x12, [x4, #E2_SNAP_MPIDR]
+    mrs x12, ID_AA64MMFR0_EL1
+    str x12, [x4, #E2_SNAP_MMFR0]
+    mrs x12, ID_AA64MMFR1_EL1
+    str x12, [x4, #E2_SNAP_MMFR1]
+    mrs x12, ID_AA64MMFR2_EL1
+    str x12, [x4, #E2_SNAP_MMFR2]
+    mrs x12, ID_AA64PFR0_EL1
+    str x12, [x4, #E2_SNAP_PFR0]
     adrp x5, __e2_image_start
     add x5, x5, :lo12:__e2_image_start
     adrp x9, __e2_stack_end

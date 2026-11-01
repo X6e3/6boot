@@ -8,17 +8,20 @@
 #define EN_RETURNED 8
 #define EN_DAIF 16
 #define EN_ALL 31
+#define EN_SYSTEM_COUNT 26
+#define EN_RECORD_VERSION 2
+#define EN_PAN_OFFSET (15 * 8)
 #define EN_BEFORE 0
-#define EN_AFTER 192
-#define EN_GPR 384
-#define EN_OBS_SP 480
-#define EN_EXPECT_SP 488
-#define EN_RET 496
-#define EN_ORIG_SP 504
-#define EN_FLAGS 512
-#define EN_ORIG_DAIF 520
-#define EN_CALL_BYTES 528
-#define EN_RECORD_BYTES 592
+#define EN_AFTER 208
+#define EN_GPR 416
+#define EN_OBS_SP 512
+#define EN_EXPECT_SP 520
+#define EN_RET 528
+#define EN_ORIG_SP 536
+#define EN_FLAGS 544
+#define EN_ORIG_DAIF 552
+#define EN_CALL_BYTES 560
+#define EN_RECORD_BYTES 624
 #define EN_PREFLIGHT 1
 #define EN_BRK 2
 #define EN_GUEST 3
@@ -28,7 +31,7 @@
 #define EN_FATAL 3
 #ifndef __ASSEMBLER__
 struct en_call {
-    uint64_t before[24], after[24], gpr[12];
+    uint64_t before[EN_SYSTEM_COUNT], after[EN_SYSTEM_COUNT], gpr[12];
     uint64_t observed_sp, expected_sp, ret, original_sp, flags, original_daif;
 };
 struct en_span { uint64_t start, size; };

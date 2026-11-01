@@ -50,7 +50,7 @@ private EL2 vectors and a bounded current-EL BRK experiment; see EXCEPTIONS.md.
 READY means preflight passed. E2_EXPECTED means the separate exception path
 completed its BRK, GPR checks and restore checks; neither denotes an EL1 guest.
 The later sixboot_el2_guest_entry is separate: it requests the EL1/HVC stage
-after the BRK checks. GUEST.md defines its save/restore and ABI v2 result.
+after the BRK checks. GUEST.md defines its save/restore and ABI v3 result.
 
 The assembly refuses CurrentEL != 8, SPSel != 1, or unmasked DAIF before
 changing stack. Such early refusals return ENVIRONMENT without writing the

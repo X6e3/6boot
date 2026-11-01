@@ -22,6 +22,13 @@ SYSTEMS=['VBAR_EL2','HCR_EL2','ELR_EL2','SPSR_EL2','ESR_EL2','FAR_EL2','SP_EL0',
          'SCTLR_EL12','VBAR_EL12','ELR_EL12','SPSR_EL12','PAR_EL1','DAIF','SPSel','PAN',
          'SCTLR_EL2','TCR_EL2','TTBR0_EL2','TTBR1_EL2','MAIR_EL2','MPIDR_EL1','CurrentEL','private_SP']
 
+def native_layout(n):
+    if le(n,0,4)!=0x45324e41: raise ValueError('native magic')
+    version,size=le(n,4,2),le(n,6,2)
+    if (version,size,len(n))==(1,592,592): return SYSTEMS,256,448,544
+    if (version,size,len(n))==(2,624,624): return SYSTEMS+['ESR_EL12','FAR_EL12'],272,480,576
+    raise ValueError('unsupported native version/size')
+
 def le(b,o,n=8):
     if o<0 or o+n>len(b): raise ValueError('truncated record at '+str(o))
     return int.from_bytes(b[o:o+n],'little')
@@ -57,23 +64,25 @@ def evaluate(props,manifest,release,cmdline):
         arena=be('load-address',8)
         check(arena>0 and arena%65536==0,'arena 64 KiB alignment')
         n=prop('native-state')
-        check(len(n)==592 and le(n,0,4)==0x45324e41 and le(n,4,2)==1 and le(n,6,2)==592,'native E2NA v1/592')
+        names,after_off,gpr_off,tail=native_layout(n)
+        report['native_version']=le(n,4,2)
         check(le(n,8,4)==MODES[mode] and le(n,12,4)==status and le(n,16,4)==called,'native record agrees with DT')
-        check(le(n,24)==31 and le(n,32)==ret and le(n,560)==ret and le(n,576)==31,'all outer return checks passed')
-        before=[le(n,64+8*i) for i in range(24)];after=[le(n,256+8*i) for i in range(24)]
-        report['systems']={name:{'before':hex(before[i]),'after':hex(after[i])} for i,name in enumerate(SYSTEMS)}
-        check(before==after,'24 caller context values preserved')
+        check(le(n,24)==31 and le(n,32)==ret and le(n,tail+16)==ret and le(n,tail+32)==31,'all outer return checks passed')
+        before=[le(n,64+8*i) for i in range(len(names))];after=[le(n,after_off+8*i) for i in range(len(names))]
+        report['systems']={name:{'before':hex(before[i]),'after':hex(after[i])} for i,name in enumerate(names)}
+        check(before==after,str(len(names))+' caller context values preserved')
         check(before[22]==8 and before[14]==1 and before[13]&0x3c0==0x3c0,'EL2h and masked module entry')
-        check([le(n,448+8*i) for i in range(12)]==list(range(0x712,0x71e)),'x18..x29 caller preservation')
-        check(le(n,544)==le(n,552)==before[23] and le(n,544)%16==0,'caller SP restored and aligned')
-        check(le(n,568)%16==0,'original calling frame aligned')
+        check([le(n,gpr_off+8*i) for i in range(12)]==list(range(0x712,0x71e)),'x18..x29 caller preservation')
+        check(le(n,tail)==le(n,tail+8)==before[23] and le(n,tail)%16==0,'caller SP restored and aligned')
+        check(le(n,tail+24)%16==0,'original calling frame aligned')
         o=prop('ownership')
         check(len(o)==176 and le(o,0,4)==0x45324f57 and le(o,4,2)==1 and le(o,6,2)==176 and le(o,8,4)==10,'ownership E2OW record')
         spans=[(le(o,16+16*i),le(o,24+16*i)) for i in range(10)]
         loader,bss,storage,area,stack,request,result,state,kernel,ctrr=spans
+        check(state[1]==len(n)-64,'observer span matches native ABI')
         check(area==(arena,131072) and contains(storage,area) and contains(bss,storage) and contains(loader,bss),'arena belongs to loader BSS')
         check(stack[1]==16384 and contains(bss,stack) and not overlap(area,stack),'separate 16 KiB caller stack')
-        check(le(n,552)==stack[0]+stack[1],'native private stack top')
+        check(le(n,tail+8)==stack[0]+stack[1],'native private stack top')
         check(all(contains(bss,r) and not overlap(area,r) for r in [request,result,state]),'observer buffers outside module arena')
         check(not overlap(area,kernel) and kernel[1]>0,'kernel disjoint from arena')
         report['ownership']={name:{'start':hex(r[0]),'size':hex(r[1])} for name,r in zip(
@@ -98,12 +107,23 @@ def evaluate(props,manifest,release,cmdline):
               (arena+131072,2**64-1-arena-131072),'request excludes every address outside arena')
         r=prop('result')
         if mode=='preflight':
-            check(len(r)==128 and le(r,0,4)==0x45325253 and le(r,4,2)==1 and le(r,6,2)==128,'preflight E2RS ABI')
+            pair=(le(r,4,2),le(r,6,2),len(r))
+            check(le(r,0,4)==0x45325253 and pair in [(1,128,128),(2,160,160)],'preflight E2RS version/size')
+            if pair==(2,160,160):
+                report['feature_registers']={name:hex(le(r,128+8*i)) for i,name in enumerate(
+                    ['ID_AA64MMFR0_EL1','ID_AA64MMFR1_EL1','ID_AA64MMFR2_EL1','ID_AA64PFR0_EL1'])}
+            else: report['feature_registers']=None # not captured by the historical protocol
+
             check(ret==le(r,8,4)==0 and le(r,12,4)==3 and le(r,16)==8 and le(r,24)==1,'preflight READY (no exception proof)')
             check(le(r,80)==arena and le(r,88)==131072,'preflight reports same arena')
         else:
             count=4 if mode=='guest' else 1
-            check(len(r)==2048 and le(r,0,4)==0x45324558 and le(r,4,2)==2 and le(r,6,2)==2048,'exception E2EX v2/2048')
+            version=le(r,4,2)
+            check(len(r)==2048 and le(r,0,4)==0x45324558 and version in (2,3) and le(r,6,2)==2048,'exception E2EX version/size')
+            header=272 if version==3 else 256
+            if mode=='guest' and version==3 and len(names)==26:
+                check(le(r,256)==before[24] and le(r,264)==before[25],'saved EL1 fault banks agree with observer')
+
             check(ret==(22 if mode=='guest' else 13) and le(r,8,4)==13 and le(r,12,4)==(31 if mode=='guest' else 7),'separate BRK/guest statuses')
             check(le(r,16,4)==count and le(r,20,4)==384 and le(r,24)==0 and le(r,32)==1023,'bounded trace and full restore mask')
             check(le(r,160)==le(r,168)==0,'handler inactive with zero depth')
@@ -115,7 +135,7 @@ def evaluate(props,manifest,release,cmdline):
             sym=manifest['trace_symbols']
             pcs=[arena+sym[k] for k in ['e2_expected_brk','e2_guest_after_probe','e2_guest_after_signature','e2_guest_after_done']]
             for i in range(count):
-                f=r[256+384*i:256+384*(i+1)];event=[13,21,28,22][i]
+                f=r[header+384*i:header+384*(i+1)];event=[13,21,28,22][i]
                 esr=[0xf2006e32,0x5a006e33,0x5a006e37,0x5a006e34][i]
                 regs=[(0x100 if i==0 else 0x200)+j for j in range(31)]
                 if i==2: regs[0]=0x5a5

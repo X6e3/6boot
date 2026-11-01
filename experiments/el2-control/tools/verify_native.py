@@ -47,7 +47,10 @@ def main():
         assert len(image)==meta['bytes'] and sha(image)==meta['sha256']
         assert image==stage+b'chosen.bootargs='+meta['cmdline'].encode()+b'\n'+newtree+kernel+initrd
         print('PASS',mode,meta['sha256'],'exact REL3 kernel/initrd; DT only adds mode')
-    for name,digest in m['source'].items():assert sha((b/'source/6boot'/name).read_bytes())==digest
+    # Current assembler uses source/; accept the original packaged layout too.
+    roots=[root for root in [b/'source',b/'source/6boot'] if (root/'Makefile').is_file()]
+    assert len(roots)==1, 'missing or ambiguous source root'
+    for name,digest in m['source'].items():assert sha((roots[0]/name).read_bytes())==digest
     print('PASS original REL3 reconstruction, stage2/module/source manifest; build',m['build_id'])
 
 if __name__=='__main__':main()

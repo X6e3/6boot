@@ -32,7 +32,7 @@ class InstructionGuards(unittest.TestCase):
     def find(self, operation, prefix, lo=0, hi=1 << 64):
         for line in self.dis.splitlines():
             m = re.match(r"\s*([0-9a-f]+):\s+[0-9a-f]{8}\s+([a-z][a-z0-9_.]*)\s*(.*)", line)
-            if m and lo <= int(m[1], 16) < hi and m[2] == operation and m[3].startswith(prefix):
+            if m and lo <= int(m[1], 16) < hi and m[2] == operation and module.dis_operands(m[2],m[3].lower()).startswith(prefix):
                 return int(m[1], 16)
         self.fail("instruction not found: " + operation + " " + prefix)
 
@@ -56,6 +56,12 @@ class InstructionGuards(unittest.TestCase):
             dis.write_bytes(subprocess.check_output([objdump, "-d", str(elf)]))
             with self.assertRaisesRegex(SystemExit, reason):
                 module.audit(elf, binary, dis, build / "exception.su")
+
+    def test_missing_el1_fault_restore(self):
+        for reg in ["esr_el12", "far_el12"]:
+            with self.subTest(reg=reg):
+                at=self.find("msr",reg+",",self.symbols["e2_exception_restore"])
+                self.reject_mutation(at,0xd503201f,"missing restore writes")
 
     def test_baseline(self):
         self.assertEqual(module.audit(build / "el2-foundation.elf", build / "el2-foundation.bin",
@@ -119,7 +125,7 @@ class InstructionGuards(unittest.TestCase):
         self.reject_mutation(self.symbols["e2_guest_signature"], 0xd40dc682, "guest handshake HVC")
 
     def test_guest_memory_access(self):
-        self.reject_mutation(self.symbols["e2_guest_payload"], 0xf9400000, "guest must remain register-only")
+        self.reject_mutation(self.symbols["e2_guest_payload"], 0xf9400000, "unreviewed guest instruction: ldr")
 
     def test_semihosting_in_module(self):
         self.reject_mutation(self.symbols["e2_expected_brk"], 0xd45e0000,
