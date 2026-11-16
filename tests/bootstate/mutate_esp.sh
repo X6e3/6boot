@@ -33,6 +33,12 @@ mutants=(
   'xboot_trial.c ::: if (!xb_bs_wants_trial(r->record, in.record_len) || xb_bs_parse(r->record, in.record_len, &bs)) ::: if (xb_bs_parse(r->record, in.record_len, &bs))'
   'xboot_trial.c :::         if (e != XB_ESP_E_NOENT)\n            fail(r, XB_T_RECORD, e); :::         fail(r, XB_T_RECORD, e);'
   'xboot_trial.c ::: in.trial = memcmp(r->trial_sha256, bs.trial_sha256, 32) ? XB_BS_TRIAL_HASH : XB_BS_TRIAL_OK; ::: in.trial = XB_BS_TRIAL_OK;'
+  'xboot_trial.c ::: xb_sha256_update(k->sha, k->buf + k->len, len); ::: xb_sha256_update(k->sha, data, len - (len > 1));'
+  'xboot_trial.c ::: r->trial = k.buf; ::: r->trial = NULL;'
+  'xboot_trial.c ::: if (write(d->ctx, r->rec_block, block)) ::: if (write(d->ctx, r->rec_block, block) && 0)'
+  'xboot_trial.c ::: if (flush(d->ctx)) ::: if (0)'
+  'xboot_trial.c ::: if (memcmp(block, verify, d->bytes)) ::: if (0)'
+  'xboot_trial.c ::: if (xb_blk_read(d, r->rec_block, verify)) ::: if (0 && xb_blk_read(d, r->rec_block, verify))'
 )
 killed=0
 for m in "${mutants[@]}"; do
@@ -49,8 +55,10 @@ sys.exit(0 if n == 1 else 3)
 PY
   if [ $? -ne 0 ]; then echo "MUTANT DID NOT APPLY: $file: $from"; cp "$R/src/$file" "$T/src/$file"; continue; fi
   rm -f "$T/build/esp-test"
-  if make -s -C "$T/tests/bootstate" BUILD="$T/build" "$T/build/esp-test" >/dev/null 2>&1 &&
-     "$T/build/esp-test" >/dev/null 2>&1 &&
+  if ! make -s -C "$T/tests/bootstate" BUILD="$T/build" "$T/build/esp-test" >/dev/null 2>&1; then
+    echo "MUTANT DID NOT BUILD: $file: $from"; cp "$R/src/$file" "$T/src/$file"; continue
+  fi
+  if "$T/build/esp-test" >/dev/null 2>&1 &&
      python3 -I "$T/tests/bootstate/esp_fixture_test.py" "$T/build/esp-test" --check "$T/fixture" >/dev/null 2>&1; then
     echo "SURVIVED: $file: $from"
   else

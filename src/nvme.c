@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: MIT */
 
+#include "../build/build_cfg.h" /* SIXBOOT_LEVEL2_TRIAL comes from CFG */
 #include "adt.h"
 #include "assert.h"
 #include "malloc.h"
@@ -229,6 +230,10 @@ static bool nvme_exec_command(struct nvme_queue *q, struct nvme_command *cmd, u6
 
     memset(tcb, 0, sizeof(*tcb));
     tcb->opcode = 0;
+#ifdef SIXBOOT_LEVEL2_TRIAL
+    if (queue_cmd->opcode == NVME_CMD_WRITE && !q->adminq)
+        tcb->opcode = NVME_CMD_WRITE; /* as Linux's apple driver fills the TCB for a write */
+#endif
     if (!queue_cmd->prp1)
         tcb->dma_flags = 0;
     else if (queue_cmd->opcode & 1)
@@ -586,3 +591,32 @@ bool nvme_read(u32 nsid, u64 lba, void *buffer)
 
     return nvme_exec_command(&ioq, &cmd, NULL);
 }
+
+#ifdef SIXBOOT_LEVEL2_TRIAL
+/*
+ * 6boot trial boots: one block, the only write stage 2 makes (xboot_level2.c, through
+ * xb_trial_commit, which flushes and reads it back). m1n1 itself never writes; the command path above
+ * already gives an odd opcode a TCB that DMAs to the device.
+ */
+bool nvme_write(u32 nsid, u64 lba, const void *buffer)
+{
+    struct nvme_command cmd;
+    u64 buffer_addr = (u64)buffer;
+
+    if (!nvme_initialized)
+        return false;
+
+    if (buffer_addr & (SZ_4K - 1))
+        return false;
+
+    memset(&cmd, 0, sizeof(cmd));
+    cmd.opcode = NVME_CMD_WRITE;
+    cmd.nsid = nsid;
+    cmd.prp1 = buffer_addr;
+    cmd.cdw10 = lba;
+    cmd.cdw11 = lba >> 32;
+    cmd.cdw12 = 0; // #blocks, 0-based -> 1 block a 4096 bytes
+
+    return nvme_exec_command(&ioq, &cmd, NULL);
+}
+#endif

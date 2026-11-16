@@ -177,6 +177,31 @@ def build(d):
            "record": f"{rec[0]}/{rec[1]}", "trial": f"{tri[0]}/{tri[1]}",
            "sha": hashlib.sha256(trial).hexdigest(), "block": str(256 + where[0] // 4096),
            "out": bs.encode(bs.Record(**{**bs.decode(armed).__dict__, "tries_left": 0, "seq": 42})).hex()})
+    # What stage 2 does with SIXBOOT_LEVEL2_TRIAL, on a copy of the disk: boot 1 spends the try (one
+    # write, read back) and boots the trial; boot 2 finds it spent and boots its own image, writing
+    # nothing. Then the same first boot with each way the write can go wrong.
+    blk = 256 + where[0] // 4096
+    spent = bs.encode(bs.Record(**{**bs.decode(armed).__dict__, "tries_left": 0, "seq": 42})).hex()
+    boot_args = ["boot", name, 4096, UUID]
+    check_args = ["check", name, 4096, UUID]
+    tests.append({"what": "boot 1 spends the try and boots the trial, boot 2 falls back", "boot": name,
+                  "only": [blk * 4096, blk * 4096 + 512], "record": spent, "steps": [
+                      {"args": boot_args, "want": {"path": "trial", "reason": "trial", "write": "1", "wrote": "1",
+                                                   "wstep": "none", "writes": "1", "at": str(blk),
+                                                   "kept": hashlib.sha256(trial).hexdigest()}},
+                      {"args": check_args, "want": {"boot": "own", "reason": "trial-failed", "write": "0"}},
+                      {"args": boot_args, "want": {"path": "known", "reason": "trial-failed", "writes": "0",
+                                                   "kept": "-"}},
+                  ]})
+    for fault, step, after in (("fail-write", "write", "trial"), ("lost", "verify", "trial"),
+                               ("torn", "verify", "bad-record"), ("fail-flush", "flush", "trial-failed")):
+        # fail-flush: the bytes did reach the file (fclose flushes them); on the NVMe either state is
+        # safe: the try spent (trial-failed) or not (the trial again)
+        tests.append({"what": f"boot 1 with a {fault} write boots its own image", "boot": name, "steps": [
+            {"args": boot_args + [fault], "want": {"path": "known", "reason": "write-failed", "wrote": "-1",
+                                                   "wstep": step, "kept": "-"}},
+            {"args": check_args, "want": {"reason": after, "boot": "trial" if after == "trial" else "own"}},
+        ]})
     for path, data in (("M1N1/BOOT.BIN", boot), ("j713/bootstate.bin", armed), ("J713/BOOTSTATE.BIN", armed),
                        ("m1n1/boot-trial.bin", trial)):
         c = walk(raw, path)
@@ -281,13 +306,64 @@ def check_all(c_test, d, quiet=False):
     with open(os.path.join(d, "manifest.json")) as f:
         tests = json.load(f)
     checks = failures = 0
+
+    def run(args):
+        try:
+            return subprocess.run([c_test, *map(str, args)], capture_output=True, text=True, timeout=60).stdout
+        except subprocess.TimeoutExpired:
+            return "timeout"
+
+    def compare(what, out, want):
+        nonlocal checks, failures
+        got = dict(w.split("=", 1) for line in out.split("\n") for w in line.split() if "=" in w)
+        for k, v in want.items():
+            checks += 1
+            if got.get(k) != v:
+                failures += 1
+                if not quiet:
+                    print(f"FAIL: {what}: {k}={got.get(k)}, expected {v}", file=sys.stderr)
+
     for t in tests:
+        if "boot" in t:  # on a copy: boot writes to the disk
+            src = os.path.join(d, t["boot"])
+            tmp = tempfile.mkdtemp(prefix="esp-boot-")
+            copy = os.path.join(tmp, t["boot"])
+            if subprocess.run(["cp", "-c", src, copy], capture_output=True).returncode:
+                shutil.copyfile(src, copy)
+            try:
+                for st in t["steps"]:
+                    args = [copy if a == t["boot"] else a for a in st["args"]]
+                    compare(t["what"], run(args), st["want"])
+                if "only" in t:  # nothing changed outside the record's 512 bytes, and they hold the spent try
+                    lo, hi = t["only"]
+                    bad = []
+                    with open(src, "rb") as a, open(copy, "rb") as b:
+                        off = 0
+                        while True:
+                            x, y = a.read(1 << 20), b.read(1 << 20)
+                            if not x and not y:
+                                break
+                            if x != y:
+                                bad += [off + i for i in range(max(len(x), len(y)))
+                                        if (x[i:i + 1] != y[i:i + 1]) and not lo <= off + i < hi][:4]
+                            off += len(x)
+                        b.seek(lo)
+                        rec = b.read(512).hex()
+                    checks += 2
+                    if bad:
+                        failures += 1
+                        if not quiet:
+                            print(f"FAIL: {t['what']}: bytes changed outside the record: {bad[:4]}", file=sys.stderr)
+                    if rec != t["record"]:
+                        failures += 1
+                        if not quiet:
+                            print(f"FAIL: {t['what']}: the record on disk is not the spent try", file=sys.stderr)
+            finally:
+                shutil.rmtree(tmp, ignore_errors=True)
+            continue
         args = [os.path.join(d, a) if isinstance(a, str) and (a.endswith(".img") or a.endswith(".cdr")) else a
                 for a in t["args"]]
-        try:
-            out = subprocess.run([c_test, *map(str, args)], capture_output=True, text=True, timeout=60).stdout
-        except subprocess.TimeoutExpired:
-            out = "timeout"
+        out = run(args)
         if "line" in t:
             checks += 1
             if out.strip() != t["line"]:
@@ -295,13 +371,7 @@ def check_all(c_test, d, quiet=False):
                 if not quiet:
                     print(f"FAIL: {t['what']}: {out.strip()!r}, expected {t['line']!r}", file=sys.stderr)
             continue
-        got = dict(w.split("=", 1) for line in out.split("\n") for w in line.split() if "=" in w)
-        for k, v in t["want"].items():
-            checks += 1
-            if got.get(k) != v:
-                failures += 1
-                if not quiet:
-                    print(f"FAIL: {t['what']}: {k}={got.get(k)}, expected {v}", file=sys.stderr)
+        compare(t["what"], out, t["want"])
     return checks, failures
 
 

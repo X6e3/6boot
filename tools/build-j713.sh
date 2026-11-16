@@ -34,5 +34,9 @@ variant user "FB_SILENT_MODE SIXBOOT_USER"
 # Trial boots, log only (installer level 2): the same two, plus the read-only check of the ESP.
 variant dev-l2 "SIXBOOT_LEVEL2"
 variant user-l2 "FB_SILENT_MODE SIXBOOT_USER SIXBOOT_LEVEL2"
+# Trial boots carried out: a chosen trial spends its one try on disk (one block) and boots.
+variant dev-l2t "SIXBOOT_LEVEL2 SIXBOOT_LEVEL2_TRIAL"
+variant user-l2t "FB_SILENT_MODE SIXBOOT_USER SIXBOOT_LEVEL2 SIXBOOT_LEVEL2_TRIAL"
 grep -q '^#define SIXBOOT_USER' "$O/user/build/build_cfg.h"
-(cd "$O" && sha256sum entry-probe.bin m1n1-6boot-dev.bin m1n1-6boot-user.bin m1n1-6boot-dev-l2.bin m1n1-6boot-user-l2.bin)
+(cd "$O" && sha256sum entry-probe.bin m1n1-6boot-dev.bin m1n1-6boot-user.bin m1n1-6boot-dev-l2.bin m1n1-6boot-user-l2.bin \
+    m1n1-6boot-dev-l2t.bin m1n1-6boot-user-l2t.bin)

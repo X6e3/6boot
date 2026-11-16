@@ -6,6 +6,11 @@
  *   esp-test find   IMG BLOCKBYTES UUID          prints "FIRST COUNT" or "err N"
  *   esp-test lookup IMG BLOCKBYTES UUID PATH     prints "CLUSTER SIZE SHA256HEX" or "err N"
  *   esp-test check  IMG BLOCKBYTES UUID          prints the decision and the report, one key=value each
+ *   esp-test boot   IMG BLOCKBYTES UUID [FAULT]  what stage 2 does with SIXBOOT_LEVEL2_TRIAL: the check that
+ *                                                keeps the trial, then for a trial the one write, on IMG
+ *                                                itself. FAULT: fail-write, fail-flush, lost (the write
+ *                                                reports success and writes nothing), torn (only the
+ *                                                block's first 300 bytes are written).
  */
 #define _POSIX_C_SOURCE 200809L /* fseeko and off_t under -std=c11 on glibc */
 #include <stdio.h>
@@ -165,6 +170,42 @@ static int file_read(void *ctx, uint64_t block, void *buf)
     return fread(buf, 1, fd->bytes, fd->f) == fd->bytes ? 0 : -1;
 }
 
+static const char *fault = "";
+static long writes;
+static uint64_t written_at = UINT64_MAX;
+
+static int file_write(void *ctx, uint64_t block, const void *buf)
+{
+    struct file_dev *fd = ctx;
+    size_t n = fd->bytes;
+    writes++;
+    written_at = block;
+    if (!strcmp(fault, "fail-write"))
+        return -1;
+    if (!strcmp(fault, "lost"))
+        return 0;
+    if (!strcmp(fault, "torn"))
+        n = 300;
+    if (fseeko(fd->f, (off_t)(block * fd->bytes), SEEK_SET) || fwrite(buf, 1, n, fd->f) != n)
+        return -1;
+    return 0;
+}
+
+static int file_flush(void *ctx)
+{
+    struct file_dev *fd = ctx;
+    if (!strcmp(fault, "fail-flush"))
+        return -1;
+    return fflush(fd->f) ? -1 : 0;
+}
+
+static size_t kept_len;
+static void *keep_alloc(size_t n)
+{
+    kept_len = n;
+    return malloc(n ? n : 1);
+}
+
 struct sha_ctx {
     struct xb_sha256 s;
 };
@@ -179,7 +220,8 @@ static int cli(int argc, char **argv)
 {
     if (argc < 5)
         return 2;
-    struct file_dev fd = {fopen(argv[2], "rb"), (uint32_t)strtoul(argv[3], NULL, 0), 0};
+    int booting = !strcmp(argv[1], "boot");
+    struct file_dev fd = {fopen(argv[2], booting ? "r+b" : "rb"), (uint32_t)strtoul(argv[3], NULL, 0), 0};
     if (!fd.f || !fd.bytes)
         return 2;
     uint8_t *cache = malloc(fd.bytes), *block = malloc(fd.bytes);
@@ -238,6 +280,30 @@ static int cli(int argc, char **argv)
             hex(r.d.out, XB_BS_BYTES, out);
             printf("out=%s\n", out);
         }
+        return 0;
+    }
+    if (booting) {
+        struct xb_trial_report r;
+        uint8_t *verify = malloc(fd.bytes);
+        if (argc > 5)
+            fault = argv[5];
+        xb_trial_check_keep(&d, argv[4], block, keep_alloc, &r);
+        int boots_trial = r.d.boot == XB_BS_BOOT_TRIAL &&
+                          !xb_trial_commit(&d, &r, block, verify, file_write, file_flush);
+        char kept[65] = "-";
+        if (r.trial) {
+            uint8_t dg[32];
+            struct xb_sha256 s;
+            xb_sha256_init(&s);
+            xb_sha256_update(&s, r.trial, kept_len);
+            xb_sha256_final(&s, dg);
+            hex(dg, 32, kept);
+        }
+        fclose(fd.f);
+        printf("path=%s reason=%s write=%d wrote=%d wstep=%s writes=%ld at=%lld block=%llu kept=%s\n",
+               boots_trial ? "trial" : "known", xb_bs_reason_name(r.d.reason), r.d.write, r.wrote,
+               xb_commit_step_name(r.wstep), writes, written_at == UINT64_MAX ? -1LL : (long long)written_at,
+               (unsigned long long)r.rec_block, kept);
         return 0;
     }
     return 2;
