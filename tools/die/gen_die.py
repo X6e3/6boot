@@ -2,10 +2,13 @@
 """The 6boot die: a floorplan of 6boot's own stage2, one block per part, each block's area its
 non-blank source lines (P2T stage2 + P3 entry + boot trace, counted 21 Oct 2026).
 
-Hue says who owns the code: 6boot's own parts in the colours of a Cell SPU die photo, code still
-taken from m1n1 and its libraries in grey. Brightness says power: a block lights when its boot
-step runs and goes dark again when 6boot tears it down. The hypervisor is built in but never
-runs during boot, so it stays dark: dark silicon.
+Hue says who owns the code and what it is: m1n1 and its libraries in bronze, 6boot's own parts in
+olive, one chip with two hands; within each family a tone per kind of block, as on a die shot
+(logic, SRAM, PHYs, cores, buses, mixed). Brightness says power: a block lights when its boot step
+runs and goes dark again when 6boot tears it down. The hypervisor is built in but never runs during
+boot; its block is the TM block instead, lit throughout: an ice-blue to cold-navy square wave from
+a framed square, the one colour on the die that is not metal (6 Nov 2026, the first ANE matmul on
+Linux).
 
     gen_die.py <outdir>     writes die-<state>.png previews and blocks.json
 """
@@ -42,10 +45,10 @@ BLOCKS = [
     ('power',         1687, 'm1n1', 4,  14),
     ('USB',           2425, 'm1n1', 5,  9),
     ('PCIe',           763, 'm1n1', 6,  14),
-    ('hypervisor',    3283, 'm1n1', 99, 99),
+    ('hypervisor',    3283, 'm1n1', -1, 127),  # the TM block: lit from the start, never torn down
 ]
 KIND = {'heap': 'sram', 'memory': 'sram', 'runtime': 'logic', 'kboot': 'logic', 'libfdt': 'logic',
-        'payload': 'logic', 'hypervisor': 'logic', 'USB': 'phy', 'PCIe': 'phy', 'NVMe': 'phy',
+        'payload': 'logic', 'hypervisor': 'tm', 'USB': 'phy', 'PCIe': 'phy', 'NVMe': 'phy',
         'display': 'mixed', 'coprocessors': 'mixed', 'framebuffer': 'sram', 'CPUs': 'cores',
         'exceptions': 'logic', 'power': 'bus', 'boot trace': 'sram', 'hooks': 'logic',
         'contract': 'logic', 'adapter': 'mixed', 'entry probe': 'cores', 'handoff record': 'bus'}
@@ -84,10 +87,26 @@ def hexc(s):
     return tuple(int(s[i:i + 2], 16) for i in (0, 2, 4))
 
 
-# Hue: 6boot's own parts glow phosphor green, the trace's colour; m1n1's parts are the bronze and
-# olive of an old die photo. Brightness: power. Amber edge: the block's step is running.
-OWN = [hexc(c) for c in ('39ff5a', '1fbf3f', '0f7a2a', 'b8ffc4', '2a9a8a', '1f5f3a', '0a3a1a')]
-BRONZE = [hexc(c) for c in ('b89a52', '8a7a3a', '5a5228', 'd8c27a', '6a6a8a', '8a4a3a', '3a3420')]
+# Hue: m1n1's family is bronze, 6boot's olive, each with a tone per kind of block. Brightness: power.
+# Amber edge: the block's step is running.
+KINDPAL = {
+    'logic': [hexc(c) for c in ('b89a52', '8a7a3a', '5a5228', 'd8c27a', '6a6a8a', '8a4a3a', '3a3420')],
+    'sram':  [hexc(c) for c in ('c4b88c', '948a60', '5c5434', 'e6dcb4', '7c7a74', '8a6c40', '2a2618')],
+    'phy':   [hexc(c) for c in ('c08a52', '8c5e34', '5a3c22', 'e2b484', '7a6a66', '9a4c30', '2a1a10')],
+    'mixed': [hexc(c) for c in ('b49a64', '86703e', '564628', 'd8c290', '74706a', '8a5a3a', '2a2216')],
+    'cores': [hexc(c) for c in ('d0b054', 'a08832', '6a5a22', 'f0d894', '8a7a5c', 'a06a32', '30280c')],
+    'bus':   [hexc(c) for c in ('a8865a', '765e3a', '4c3c24', 'ccac80', '6c6a6a', '7c4c2c', '221a10')],
+}
+KINDPAL_O = {
+    'logic': [hexc(c) for c in ('b8c860', '8a9a40', '545c28', 'e0e8a0', '7a8a6a', '8a6a3a', '2a3018')],
+    'sram':  [hexc(c) for c in ('c8d08c', '9aa264', '5c6234', 'e6ecbc', '7c8274', '8a7044', '2a2e18')],
+    'mixed': [hexc(c) for c in ('aab460', '7c843a', '4c5226', 'd4d89a', '6c7a6c', '8a6a3c', '262a18')],
+    'cores': [hexc(c) for c in ('c8c850', '9a9a30', '625e20', 'eceaa0', '8a8a5c', '9a7034', '2e2c0c')],
+    'bus':   [hexc(c) for c in ('98a058', '6e7438', '464a24', 'c0c888', '6a6e66', '7a5a30', '20240e')],
+    'phy':   [hexc(c) for c in ('a8b46c', '7a8444', '4a5228', 'd0d8a0', '6c766c', '8a6a3c', '242a16')],
+}
+# The TM block: standard cells in ice blue near the square, cold navy at the far corners
+ICE, NAVY, ICE_EDGE = hexc('2ee6ff'), hexc('1a2a78'), hexc('d8fbff')
 SUBSTRATE, RING, PAD, AMBER = hexc('16140c'), hexc('c8b04a'), hexc('9a8a4a'), hexc('ffa01e')
 
 
@@ -115,8 +134,42 @@ def layout(size):
     return edge, rects
 
 
+def ramp(b):
+    """A block palette from one colour: base, shades, tint, as the tones of the other blocks."""
+    sc = lambda f: tuple(min(255, int(v * f)) for v in b)
+    return [b, sc(.72), sc(.42), tuple(min(255, v + (255 - v) * 55 // 100) for v in b), sc(.6), sc(.3), sc(.15)]
+
+
+def tm_wave(w, h, rng):
+    """The TM block: the same standard cells in ice and in navy, blended by Chebyshev distance from a
+    framed square (half-side 6), with a faint ring every 6 px."""
+    state = rng.getstate()
+    a = texture('logic', w, h, ramp(ICE), rng)
+    rng.setstate(state)                      # the same cells, in the other colour
+    b = texture('logic', w, h, ramp(NAVY), rng)
+    smooth = lambda t: t * t * (3 - 2 * t)
+    core, ring = 6, 6
+    cx, cy = round(w * 0.34), round(h * 0.36)
+    reach = max(cx, w - 1 - cx, cy, h - 1 - cy)
+    px = []
+    for j in range(h):
+        for i in range(w):
+            d, p, q = max(abs(i - cx), abs(j - cy)), a[j * w + i], b[j * w + i]
+            if d <= core:
+                c = ICE_EDGE if d == core else tuple(min(255, v + 40) for v in p)
+            else:
+                t = smooth(min(1.0, (d - core) / (reach - core)))
+                c = tuple(round(x * (1 - t) + y * t) for x, y in zip(p, q))
+                if (d - core) % ring == 0 and t < 0.9:
+                    c = tuple(min(255, v + round(70 * (1 - t))) for v in c)
+            px.append(c)
+    return px
+
+
 def texture(kind, w, h, pal, rng):
-    """Die-photo textures: standard-cell rows, SRAM banks, PHY pads, cores, buses."""
+    """Die-photo textures: standard-cell rows, SRAM banks, PHY pads, cores, buses; and the TM wave."""
+    if kind == 'tm':
+        return tm_wave(w, h, rng)
     px = [SUBSTRATE] * (w * h)
     put = lambda x, y, c: px.__setitem__(y * w + x, c)
     if kind in ('logic', 'mixed', 'cores'):
@@ -169,7 +222,7 @@ def render(size, step, seed=6, fail=None, all_on=False):
     for name, _, owner, on, off in BLOCKS:
         x, y, w, h = rects[name]
         w, h = max(w - 1, 1), max(h - 1, 1)  # 1 px routing channel
-        tex = texture(KIND[name], w, h, OWN if owner == '6boot' else BRONZE, rng)
+        tex = texture(KIND[name], w, h, (KINDPAL_O if owner == '6boot' else KINDPAL).get(KIND[name]), rng)
         powered = all_on or (on < step < off) or (on == -1 and step < off)
         running = not all_on and step == on >= 0
         mark = (0xff, 0x30, 0x30) if fail == name else AMBER
@@ -196,7 +249,8 @@ def render(size, step, seed=6, fail=None, all_on=False):
                 img[j * size + i] = RING
             elif d < edge:
                 along = j if d in (i, size - 1 - i) else i
-                pad = ring < d < edge - 1 and along % pitch < pitch * 5 // 8 and edge <= along < size - edge
+                off = edge + ((size - 2 * edge) % pitch + pitch - pitch * 5 // 8) // 2  # whole pads, centred
+                pad = ring < d < edge - 1 and off <= along < size - off and (along - off) % pitch < pitch * 5 // 8
                 img[j * size + i] = PAD if pad else SUBSTRATE
     return img, rects
 

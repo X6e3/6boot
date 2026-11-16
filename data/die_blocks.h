@@ -29,5 +29,5 @@ static const struct die_block die_block[DIE_BLOCKS] = {
     {172, 142, 47, 57, 4, 14, 0}, /* power, 1687 lines */
     {185, 81, 63, 61, 5, 9, 0}, /* USB, 2425 lines */
     {172, 199, 45, 27, 6, 14, 0}, /* PCIe, 763 lines */
-    {178, 8, 70, 73, 99, 99, 0}, /* hypervisor, 3283 lines */
+    {178, 8, 70, 73, -1, 127, 0}, /* hypervisor, 3283 lines */
 };
