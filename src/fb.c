@@ -830,7 +830,7 @@ static void bt_step(int n)
  * green, the code still taken from m1n1 and its libraries is bronze. Brightness is power: a block
  * lights when its boot step runs, carries an amber edge while that step is running, and goes dim
  * again when 6boot tears it down. The hypervisor is built in but never runs during boot; its block is
- * the TM block, lit throughout (on -1, off 127 in die_blocks.h).
+ * the ANE block, lit throughout (on -1, off 127 in die_blocks.h).
  *
  * die_256.bin holds the die with every block powered; a block that is off is drawn from the same
  * pixels at 22% brightness. m1n1 draws the same die (blocks on from the start lit) as its boot

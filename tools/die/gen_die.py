@@ -6,9 +6,9 @@ Hue says who owns the code and what it is: m1n1 and its libraries in bronze, 6bo
 olive, one chip with two hands; within each family a tone per kind of block, as on a die shot
 (logic, SRAM, PHYs, cores, buses, mixed). Brightness says power: a block lights when its boot step
 runs and goes dark again when 6boot tears it down. The hypervisor is built in but never runs during
-boot; its block is the TM block instead, lit throughout: an ice-blue to cold-navy square wave from
-a framed square, the one colour on the die that is not metal (6 Nov 2026, the first ANE matmul on
-Linux).
+boot; its block is the ANE block instead, lit throughout: the engine itself, not one result, a
+Task Manager strip of 8 queues (TQ7, the driver's, a little brighter) over the 16 cores of the M4's
+Neural Engine, in steel blue, the one colour on the die that is not bronze or olive.
 
     gen_die.py <outdir>     writes die-<state>.png previews and blocks.json
 """
@@ -45,10 +45,10 @@ BLOCKS = [
     ('power',         1687, 'm1n1', 4,  14),
     ('USB',           2425, 'm1n1', 5,  9),
     ('PCIe',           763, 'm1n1', 6,  14),
-    ('hypervisor',    3283, 'm1n1', -1, 127),  # the TM block: lit from the start, never torn down
+    ('hypervisor',    3283, 'm1n1', -1, 127),  # the ANE block: lit from the start, never torn down
 ]
 KIND = {'heap': 'sram', 'memory': 'sram', 'runtime': 'logic', 'kboot': 'logic', 'libfdt': 'logic',
-        'payload': 'logic', 'hypervisor': 'tm', 'USB': 'phy', 'PCIe': 'phy', 'NVMe': 'phy',
+        'payload': 'logic', 'hypervisor': 'ane', 'USB': 'phy', 'PCIe': 'phy', 'NVMe': 'phy',
         'display': 'mixed', 'coprocessors': 'mixed', 'framebuffer': 'sram', 'CPUs': 'cores',
         'exceptions': 'logic', 'power': 'bus', 'boot trace': 'sram', 'hooks': 'logic',
         'contract': 'logic', 'adapter': 'mixed', 'entry probe': 'cores', 'handoff record': 'bus'}
@@ -105,8 +105,7 @@ KINDPAL_O = {
     'bus':   [hexc(c) for c in ('98a058', '6e7438', '464a24', 'c0c888', '6a6e66', '7a5a30', '20240e')],
     'phy':   [hexc(c) for c in ('a8b46c', '7a8444', '4a5228', 'd0d8a0', '6c766c', '8a6a3c', '242a16')],
 }
-# The TM block: standard cells in ice blue near the square, cold navy at the far corners
-ICE, NAVY, ICE_EDGE = hexc('2ee6ff'), hexc('1a2a78'), hexc('d8fbff')
+KINDPAL['ane'] = [hexc(c) for c in ('6a82b0', '4a5e88', '1e2a4a', 'b0c4e6', '5a8aa0', '7a6a8a', '10162a')]
 SUBSTRATE, RING, PAD, AMBER = hexc('16140c'), hexc('c8b04a'), hexc('9a8a4a'), hexc('ffa01e')
 
 
@@ -134,44 +133,43 @@ def layout(size):
     return edge, rects
 
 
-def ramp(b):
-    """A block palette from one colour: base, shades, tint, as the tones of the other blocks."""
-    sc = lambda f: tuple(min(255, int(v * f)) for v in b)
-    return [b, sc(.72), sc(.42), tuple(min(255, v + (255 - v) * 55 // 100) for v in b), sc(.6), sc(.3), sc(.15)]
-
-
-def tm_wave(w, h, rng):
-    """The TM block: the same standard cells in ice and in navy, blended by Chebyshev distance from a
-    framed square (half-side 6), with a faint ring every 6 px."""
-    state = rng.getstate()
-    a = texture('logic', w, h, ramp(ICE), rng)
-    rng.setstate(state)                      # the same cells, in the other colour
-    b = texture('logic', w, h, ramp(NAVY), rng)
-    smooth = lambda t: t * t * (3 - 2 * t)
-    core, ring = 6, 6
-    cx, cy = round(w * 0.34), round(h * 0.36)
-    reach = max(cx, w - 1 - cx, cy, h - 1 - cy)
-    px = []
-    for j in range(h):
-        for i in range(w):
-            d, p, q = max(abs(i - cx), abs(j - cy)), a[j * w + i], b[j * w + i]
-            if d <= core:
-                c = ICE_EDGE if d == core else tuple(min(255, v + 40) for v in p)
-            else:
-                t = smooth(min(1.0, (d - core) / (reach - core)))
-                c = tuple(round(x * (1 - t) + y * t) for x, y in zip(p, q))
-                if (d - core) % ring == 0 and t < 0.9:
-                    c = tuple(min(255, v + round(70 * (1 - t))) for v in c)
-            px.append(c)
-    return px
-
-
 def texture(kind, w, h, pal, rng):
-    """Die-photo textures: standard-cell rows, SRAM banks, PHY pads, cores, buses; and the TM wave."""
-    if kind == 'tm':
-        return tm_wave(w, h, rng)
+    """Die-photo textures: standard-cell rows, SRAM banks, PHY pads, cores, buses; and the ANE."""
     px = [SUBSTRATE] * (w * h)
     put = lambda x, y, c: px.__setitem__(y * w + x, c)
+    if kind == 'ane':                        # the engine: a Task Manager strip over a 4x4 array of cores
+        tm = 8
+        for q in range(8):                   # TQ0-7 as the driver reads them; TQ7, its own, a little brighter
+            x0, x1 = round(q * w / 8), round((q + 1) * w / 8)
+            for y in range(tm):
+                for x in range(x0, x1):
+                    edge = x == x0 or y == 0 or x == x1 - 1 or y == tm - 1
+                    c = pal[6] if x == x1 - 1 else pal[3] if edge else (pal[0] if q == 7 else pal[1])
+                    if not edge and y % 2:
+                        c = pal[2]
+                    put(x, y, c)
+        for x in range(w):
+            put(x, tm, pal[6])
+        xs = [round(k * w / 4) for k in range(5)]
+        ys = [tm + 1 + round(k * (h - tm - 1) / 4) for k in range(5)]
+        for r in range(4):                   # 16 cores, each with its SRAM and its MAC array
+            for c in range(4):
+                lift = rng.choice((0, 6, 12))
+                tone = lambda col: tuple(min(255, v + lift) for v in col)
+                for y in range(ys[r], ys[r + 1]):
+                    for x in range(xs[c], xs[c + 1]):
+                        lx, ly = x - xs[c], y - ys[r]
+                        cw = xs[c + 1] - xs[c]
+                        if x == xs[c + 1] - 1 or y == ys[r + 1] - 1:
+                            col = pal[6]                       # gutter between cores
+                        elif ly < 4 and lx < cw // 2:
+                            col = pal[3] if ly % 2 else pal[1]  # the core's SRAM
+                        elif lx % 3 == 0 or ly % 3 == 0:
+                            col = pal[2]                       # MAC array grid
+                        else:
+                            col = pal[0]
+                        put(x, y, tone(col))
+        return px
     if kind in ('logic', 'mixed', 'cores'):
         top = h // 2 if kind == 'mixed' else 0
         if kind == 'mixed':                  # an SRAM macro over the logic
