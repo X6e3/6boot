@@ -7,6 +7,7 @@
 #   make -C tests/bootstate fat       also FAT32 images made by macOS (needs hdiutil)
 #   make -C tests/bootstate esp-fat   GPT disks with a FAT32 ESP made by macOS: lookup, hash, the whole check
 #   make -C tests/bootstate mutate    every one-line mutant of the record module must fail the tests
+#   make -C tests/bootstate mutate-esp  the same for the ESP reader, the trial check and SHA-256 (macOS)
 CC ?= cc
 R := ../..
 BUILD ?= $(R)/build/bootstate
@@ -19,7 +20,7 @@ CFLAGS := -std=c11 -O2 -Wall -Wextra -Werror -g -fsanitize=address,undefined -fn
 FW := --target=aarch64-none-elf -std=gnu11 -O2 -Wall -Wextra -Werror -Wundef -Werror=strict-prototypes \
 	-ffreestanding -fno-builtin -mgeneral-regs-only -nostdinc \
 	-isystem $(shell $(CC) -print-file-name=include) -isystem $(R)/sysinc
-.PHONY: all test cross freestanding fat mutate esp esp-fat
+.PHONY: all test cross freestanding fat mutate mutate-esp esp esp-fat
 all: test cross esp freestanding
 $(BUILD):
 	mkdir -p $@
@@ -45,3 +46,5 @@ esp-fat: $(BUILD)/esp-test
 	python3 -I esp_fixture_test.py $<
 mutate:
 	./mutate.sh
+mutate-esp:
+	./mutate_esp.sh

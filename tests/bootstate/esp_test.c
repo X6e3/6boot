@@ -7,6 +7,7 @@
  *   esp-test lookup IMG BLOCKBYTES UUID PATH     prints "CLUSTER SIZE SHA256HEX" or "err N"
  *   esp-test check  IMG BLOCKBYTES UUID          prints the decision and the report, one key=value each
  */
+#define _POSIX_C_SOURCE 200809L /* fseeko and off_t under -std=c11 on glibc */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -88,6 +89,63 @@ static void test_uuid(void)
     CHECK(xb_uuid_parse("F2A5B0EC_1234-5678-9ABC-DEF012345678", u) != 0);
     CHECK(xb_uuid_parse("G2A5B0EC-1234-5678-9ABC-DEF012345678", u) != 0);
     CHECK(xb_uuid_parse(NULL, u) != 0);
+}
+
+/* ---- a FAT32 volume made up on the fly: directories that end exactly at a cluster's end ---- */
+
+#define V_CLUSTERS 70000U
+#define V_FATSZ ((V_CLUSTERS + 2) * 4 / 4096 + 1)
+#define V_DATA (1 + V_FATSZ) /* reserved 1, one FAT */
+
+static int virt_read(void *ctx, uint64_t block, void *buf)
+{
+    const uint32_t *chain_next = ctx; /* FAT entries for clusters 2..5 */
+    uint8_t *b = buf;
+    memset(b, 0, 4096);
+    if (block == 0) {
+        b[11] = 0x00, b[12] = 0x10;           /* 4096 bytes per sector */
+        b[13] = 1;                            /* one sector per cluster */
+        b[14] = 1;                            /* one reserved sector */
+        b[16] = 1;                            /* one FAT */
+        uint32_t total = V_DATA + V_CLUSTERS, fsz = V_FATSZ;
+        memcpy(b + 32, &total, 4);
+        memcpy(b + 36, &fsz, 4);
+        b[44] = 2;                            /* root directory at cluster 2 */
+        b[510] = 0x55, b[511] = 0xaa;
+    } else if (block == 1) {                  /* the FAT: clusters 2..5 */
+        memcpy(b + 8, chain_next, 16);
+    } else if (block >= V_DATA && block < V_DATA + 4) {
+        uint32_t cl = (uint32_t)(block - V_DATA); /* cluster 2 + cl: 128 short names, no end marker */
+        for (int k = 0; k < 128; k++) {
+            char n[12];
+            snprintf(n, sizeof(n), "F%u%03d   BIN", cl, k); /* 8.3: "F0127   BIN" */
+            memcpy(b + 32 * k, n, 11);
+            b[32 * k + 26] = (uint8_t)(10 + k); /* a first cluster, unused here */
+            b[32 * k + 28] = 1;                 /* one byte long */
+        }
+    }
+    return 0;
+}
+
+static void test_full_directories(void)
+{
+    static uint8_t cache[4096];
+    struct xb_fat f;
+    uint32_t c, size;
+    /* the root directory: one full cluster, then two full clusters, both ending with the FAT's end mark */
+    uint32_t one[4] = {0x0fffffff, 0, 0, 0}, two[4] = {3, 0x0fffffff, 0, 0}, loop[4] = {3, 2, 0, 0};
+    struct xb_blk d = {virt_read, one, 4096, cache, UINT64_MAX};
+
+    CHECK(xb_fat_mount(&f, &d, 0, V_DATA + V_CLUSTERS) == XB_ESP_OK);
+    CHECK(xb_fat_lookup(&f, "F0127.BIN", &c, &size) == XB_ESP_OK && size == 1);
+    CHECK(xb_fat_lookup(&f, "NOTHERE.BIN", &c, &size) == XB_ESP_E_NOENT);
+    d.ctx = two, d.cached = UINT64_MAX;
+    CHECK(xb_fat_mount(&f, &d, 0, V_DATA + V_CLUSTERS) == XB_ESP_OK);
+    CHECK(xb_fat_lookup(&f, "f1127.bin", &c, &size) == XB_ESP_OK);
+    CHECK(xb_fat_lookup(&f, "NOTHERE.BIN", &c, &size) == XB_ESP_E_NOENT);
+    d.ctx = loop, d.cached = UINT64_MAX;      /* a directory chain that comes back on itself */
+    CHECK(xb_fat_mount(&f, &d, 0, V_DATA + V_CLUSTERS) == XB_ESP_OK);
+    CHECK(xb_fat_lookup(&f, "NOTHERE.BIN", &c, &size) == XB_ESP_E_CHAIN);
 }
 
 /* ---- a disk image as a block device ---- */
@@ -191,6 +249,7 @@ int main(int argc, char **argv)
         return cli(argc, argv);
     test_sha256();
     test_uuid();
+    test_full_directories();
     printf("esp: %d checks, %d failed\n", checks, failures);
     return failures != 0;
 }

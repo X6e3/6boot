@@ -187,6 +187,12 @@ OBJECTS := \
 	$(DCP_OBJECTS) \
 	$(MINILZLIB_OBJECTS) $(TINF_OBJECTS) $(DLMALLOC_OBJECTS) $(LIBFDT_OBJECTS)
 
+# Trial boots (installer level 2), log only: built only when CFG has SIXBOOT_LEVEL2, so the daily
+# stage 2 is the same without it.
+ifneq (,$(filter SIXBOOT_LEVEL2,$(CFG)))
+OBJECTS += xboot_bootstate.o xboot_esp.o xboot_sha256.o xboot_trial.o xboot_level2.o
+endif
+
 FP_OBJECTS := \
 	kboot_gpu.o \
 	math/expf.o \

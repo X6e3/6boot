@@ -200,6 +200,31 @@ static int fat_next(struct xb_fat *f, uint32_t c, uint32_t *next)
     return XB_ESP_OK;
 }
 
+/* Brent's cycle check on a cluster chain: no memory, no extra reads. A chain that comes back to
+ * a cluster it has passed is caught within a few laps, whatever the file's size says. */
+struct loop {
+    uint32_t mark, power, lam;
+};
+
+static void loop_init(struct loop *l, uint32_t first)
+{
+    l->mark = first;
+    l->power = 1;
+    l->lam = 0;
+}
+
+static int loop_seen(struct loop *l, uint32_t c)
+{
+    if (c == l->mark)
+        return 1;
+    if (++l->lam == l->power) {
+        l->mark = c;
+        l->power <<= 1;
+        l->lam = 0;
+    }
+    return 0;
+}
+
 static uint64_t cluster_off(struct xb_fat *f, uint32_t c)
 {
     return (f->data_start + (uint64_t)(c - 2) * f->spc) * f->bps;
@@ -244,6 +269,9 @@ static int dir_find(struct xb_fat *f, uint32_t dir, const char *name, size_t len
     char lfn[261];
     int lfn_ok = 0;
     uint32_t c = dir, cbytes = f->spc * f->bps;
+    struct loop lp;
+
+    loop_init(&lp, dir);
 
     for (uint32_t hops = 0; c; hops++) {
         if (hops > f->clusters)
@@ -297,6 +325,8 @@ static int dir_find(struct xb_fat *f, uint32_t dir, const char *name, size_t len
         int r = fat_next(f, c, &c);
         if (r)
             return r;
+        if (c && loop_seen(&lp, c))
+            return XB_ESP_E_CHAIN;
     }
     return XB_ESP_E_NOENT;
 }
@@ -337,6 +367,8 @@ int xb_fat_read(struct xb_fat *f, uint32_t c, uint32_t size, xb_sink sink, void 
     if (!size)
         return XB_ESP_OK;
     cbytes = f->spc * f->bps;
+    struct loop lp;
+    loop_init(&lp, c);
     for (uint32_t hops = 0; left; hops++) {
         if (!c || hops > f->clusters)
             return XB_ESP_E_CHAIN;
@@ -353,6 +385,8 @@ int xb_fat_read(struct xb_fat *f, uint32_t c, uint32_t size, xb_sink sink, void 
             int r = fat_next(f, c, &c);
             if (r)
                 return r;
+            if (c && loop_seen(&lp, c))
+                return XB_ESP_E_CHAIN;
         }
     }
     return XB_ESP_OK;

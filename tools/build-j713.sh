@@ -31,5 +31,8 @@ variant() {   # variant <name> [make CFG]
 }
 variant dev
 variant user "FB_SILENT_MODE SIXBOOT_USER"
+# Trial boots, log only (installer level 2): the same two, plus the read-only check of the ESP.
+variant dev-l2 "SIXBOOT_LEVEL2"
+variant user-l2 "FB_SILENT_MODE SIXBOOT_USER SIXBOOT_LEVEL2"
 grep -q '^#define SIXBOOT_USER' "$O/user/build/build_cfg.h"
-(cd "$O" && sha256sum entry-probe.bin m1n1-6boot-dev.bin m1n1-6boot-user.bin)
+(cd "$O" && sha256sum entry-probe.bin m1n1-6boot-dev.bin m1n1-6boot-user.bin m1n1-6boot-dev-l2.bin m1n1-6boot-user-l2.bin)

@@ -312,7 +312,7 @@ int payload_run(void)
 
     while (p)
         p = load_one_payload(p, 0);
-
+    XB_LEVEL2_CHECK(chosen, chosen_cnt); /* log only; nothing in builds without SIXBOOT_LEVEL2 */
     if (chainload_spec) {
         return chainload_load(chainload_spec, chosen, chosen_cnt);
     }
