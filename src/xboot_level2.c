@@ -19,7 +19,13 @@
 #include "nvme.h"
 #include "string.h"
 #include "utils.h"
+#include "wdt.h"
 #include "xboot_trial.h"
+
+/* The watchdog for a trial (SIXBOOT_LEVEL2_WATCHDOG): long enough for Linux to boot to its apple_wdt,
+ * which takes over feeding it; a trial that never gets there resets the machine, and the next boot finds
+ * its try spent. */
+#define XB_TRIAL_WDT_S 60
 
 #define ESP_VAR "chosen.gravity,efi-system-partition="
 
@@ -103,6 +109,8 @@ void xboot_level2_check(char **vars, size_t n, void *(*load)(void *start, size_t
     }
     u64 us = ticks_to_usecs(get_ticks() - t0);
 
+    char wd[64] = "off";
+    int wdt_s = 0;
 #ifdef SIXBOOT_LEVEL2_TRIAL
     const char *mode = "trial boots";
     if (boot_trial && load) {
@@ -110,6 +118,16 @@ void xboot_level2_check(char **vars, size_t n, void *(*load)(void *start, size_t
         while (p)
             p = load(p, 0); /* later boot arguments replace 6boot's own in kboot_set_chosen */
         path = "trial";
+#ifdef SIXBOOT_LEVEL2_WATCHDOG
+        if (r.d.watchdog) {
+            u64 at = wdt_arm(XB_TRIAL_WDT_S); /* from here a hang anywhere until Linux feeds it resets */
+            wdt_s = at ? XB_TRIAL_WDT_S : -1;
+            if (at)
+                snprintf(wd, sizeof(wd), "armed=%d s at cntpct=%lu", XB_TRIAL_WDT_S, (unsigned long)at);
+            else
+                snprintf(wd, sizeof(wd), "not armed: no watchdog");
+        }
+#endif
     }
 #else
     const char *mode = "log only";
@@ -117,11 +135,12 @@ void xboot_level2_check(char **vars, size_t n, void *(*load)(void *start, size_t
     (void)boot_trial;
 #endif
     const char *would = r.d.boot == XB_BS_BOOT_TRIAL ? "trial" : "known";
-    snprintf(report, sizeof(report), "would=%s write=%d wrote=%d wstep=%s failed_at=%s err=%d block=%lu us=%lu",
+    snprintf(report, sizeof(report), "would=%s write=%d wrote=%d wstep=%s failed_at=%s err=%d block=%lu us=%lu wdt=%d",
              would, r.d.write, r.wrote, xb_commit_step_name(r.wstep), xb_trial_step_name(r.failed_at), r.err,
-             (unsigned long)r.rec_block, (unsigned long)us);
+             (unsigned long)r.rec_block, (unsigned long)us, wdt_s);
     printf("6boot: level 2, %s: %s, boots %s (%s)\n", mode, xb_bs_reason_name(r.d.reason), path, report);
     kboot_set_chosen("xboot,path", path);
     kboot_set_chosen("xboot,trial", xb_bs_reason_name(r.d.reason));
     kboot_set_chosen("xboot,trial-report", report);
+    kboot_set_chosen("xboot,watchdog", wd);
 }

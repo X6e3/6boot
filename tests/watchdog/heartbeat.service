@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+# The watchdog tests' clock (heartbeat.c), only on boots whose command line has x6e3.hb=1, which the
+# test trials carry; other boots skip it.
+[Unit]
+Description=6boot watchdog test heartbeat (x6e3.hb=1 only)
+ConditionKernelCommandLine=x6e3.hb=1
+DefaultDependencies=no
+After=local-fs.target
+Conflicts=shutdown.target
+Before=shutdown.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/6boot-heartbeat
+
+[Install]
+WantedBy=sysinit.target

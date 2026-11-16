@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: MIT */
 
+#include "../build/build_cfg.h" /* SIXBOOT_LEVEL2_WATCHDOG comes from CFG */
 #include "wdt.h"
 #include "adt.h"
 #include "types.h"
@@ -57,3 +58,32 @@ void wdt_reboot(void)
     write32(wdt_base + WDT_COUNT, 0);
     write32(wdt_base + WDT_CTL, 4);
 }
+
+#ifdef SIXBOOT_LEVEL2_WATCHDOG
+#ifndef SIXBOOT_LEVEL2_TRIAL
+#error "SIXBOOT_LEVEL2_WATCHDOG arms the watchdog for trials: it needs SIXBOOT_LEVEL2_TRIAL"
+#endif
+/* The J713's (t8132) watchdog runs on the 24 MHz reference clock, as Linux's device tree says (clkref). */
+#define WDT_HZ 24000000U
+
+/*
+ * 6boot trial boots: arm the primary watchdog, the one wdt_disable() turned off at start (Linux's
+ * apple_wdt calls it WD1), to reset the machine `seconds` from now unless something feeds it; Linux's
+ * apple_wdt does from the moment it probes, and a reset ends in the first stage, whose m1n1 turns it
+ * off again. The same three registers wdt_reboot() writes, with a long alarm. Returns the counter
+ * (CNTPCT_EL0, 24 MHz) at the moment it was enabled, or 0 when there is no watchdog or seconds is out
+ * of range; nothing is armed then.
+ */
+u64 wdt_arm(u32 seconds)
+{
+    if (!wdt_base || !seconds || seconds > 0xffffffffU / WDT_HZ)
+        return 0;
+
+    write32(wdt_base + WDT_CTL, 0);
+    write32(wdt_base + WDT_ALARM, seconds * WDT_HZ);
+    write32(wdt_base + WDT_COUNT, 0);
+    u64 t = get_ticks();
+    write32(wdt_base + WDT_CTL, 4);
+    return t;
+}
+#endif

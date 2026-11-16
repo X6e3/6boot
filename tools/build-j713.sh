@@ -37,6 +37,9 @@ variant user-l2 "FB_SILENT_MODE SIXBOOT_USER SIXBOOT_LEVEL2"
 # Trial boots carried out: a chosen trial spends its one try on disk (one block) and boots.
 variant dev-l2t "SIXBOOT_LEVEL2 SIXBOOT_LEVEL2_TRIAL"
 variant user-l2t "FB_SILENT_MODE SIXBOOT_USER SIXBOOT_LEVEL2 SIXBOOT_LEVEL2_TRIAL"
+# And the watchdog armed for a trial (60 s), which Linux's apple_wdt takes over.
+variant dev-l2w "SIXBOOT_LEVEL2 SIXBOOT_LEVEL2_TRIAL SIXBOOT_LEVEL2_WATCHDOG"
+variant user-l2w "FB_SILENT_MODE SIXBOOT_USER SIXBOOT_LEVEL2 SIXBOOT_LEVEL2_TRIAL SIXBOOT_LEVEL2_WATCHDOG"
 grep -q '^#define SIXBOOT_USER' "$O/user/build/build_cfg.h"
 (cd "$O" && sha256sum entry-probe.bin m1n1-6boot-dev.bin m1n1-6boot-user.bin m1n1-6boot-dev-l2.bin m1n1-6boot-user-l2.bin \
-    m1n1-6boot-dev-l2t.bin m1n1-6boot-user-l2t.bin)
+    m1n1-6boot-dev-l2t.bin m1n1-6boot-user-l2t.bin m1n1-6boot-dev-l2w.bin m1n1-6boot-user-l2w.bin)
