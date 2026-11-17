@@ -70,9 +70,10 @@ void wdt_reboot(void)
  * 6boot trial boots: arm the primary watchdog, the one wdt_disable() turned off at start (Linux's
  * apple_wdt calls it WD1), to reset the machine `seconds` from now unless something feeds it; Linux's
  * apple_wdt does from the moment it probes, and a reset ends in the first stage, whose m1n1 turns it
- * off again. The same three registers wdt_reboot() writes, with a long alarm. Returns the counter
- * (CNTPCT_EL0, 24 MHz) at the moment it was enabled, or 0 when there is no watchdog or seconds is out
- * of range; nothing is armed then.
+ * off again. The same three registers wdt_reboot() writes, with a long alarm. Returns CNTPCT_EL0 at
+ * the moment it was enabled, or 0 when there is no watchdog or seconds is out of range; nothing is
+ * armed then. CNTPCT_EL0 counts at CNTFRQ_EL0 (1 GHz on the M4, measured on the J713 17 Nov 2026),
+ * not at the watchdog's 24 MHz: the two clocks must not be mixed.
  */
 u64 wdt_arm(u32 seconds)
 {

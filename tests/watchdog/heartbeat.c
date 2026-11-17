@@ -6,10 +6,12 @@
  *
  *   t <CNTVCT_EL0> <CLOCK_BOOTTIME ns> <CLOCK_REALTIME s.ns>
  *
- * CNTVCT_EL0 is the 24 MHz counter 6boot read when it armed the watchdog (xboot,watchdog in /chosen);
- * Linux at EL2 sets CNTVOFF_EL2 to 0, so the two count alike, and the header checks it against
- * CLOCK_BOOTTIME. A boot that a reset ends has its last line within half a second of the reset; one
- * that is shut down ends with "stopped".
+ * CNTVCT_EL0 is the counter 6boot read (as CNTPCT_EL0) when it armed the watchdog (xboot,watchdog in
+ * /chosen). Linux at EL2 clears CNTVOFF_EL2 (arch/arm64/include/asm/el2_setup.h), so the two are the
+ * same count. Its rate is CNTFRQ_EL0, which the header logs: 1 GHz on the J713's M4 (24 MHz in the
+ * build VM), not the watchdog's 24 MHz. The header also says where CLOCK_BOOTTIME 0 falls on the
+ * counter. The last line of a boot that a reset ends is the last heartbeat that reached the disk; the
+ * reset came after it. A boot that is shut down ends with "stopped".
  *
  *   heartbeat [DIR]
  */
@@ -36,6 +38,19 @@ static unsigned long long cntvct(void)
     unsigned long long v;
     __asm__ volatile("isb; mrs %0, cntvct_el0" : "=r"(v));
     return v;
+}
+
+static unsigned long long cntfrq(void)
+{
+    unsigned long long v;
+    __asm__ volatile("mrs %0, cntfrq_el0" : "=r"(v));
+    return v;
+}
+
+/* the counter value when CLOCK_BOOTTIME was 0: cnt minus boottime in counter ticks, without overflow */
+static long long boottime0(unsigned long long cnt, long long boot_ns, unsigned long long frq)
+{
+    return (long long)cnt - (long long)((__int128)boot_ns * frq / 1000000000);
 }
 
 static long long ns(clockid_t c)
@@ -111,11 +126,11 @@ int main(int argc, char **argv)
              access("/dev/watchdog0", F_OK) ? "none" : "/dev/watchdog0",
              access("/sys/bus/platform/drivers/apple-watchdog", F_OK) ? "not registered" : "registered");
     put(fd, line);
-    /* the counter against CLOCK_BOOTTIME: where boottime 0 falls on the counter */
-    unsigned long long c = cntvct();
+    /* the counter against CLOCK_BOOTTIME: its rate, and where boottime 0 falls on it */
+    unsigned long long f = cntfrq(), c = cntvct();
     long long b = ns(CLOCK_BOOTTIME);
-    snprintf(line, sizeof(line), "clock cntvct=%llu boottime_ns=%lld boottime0_cnt=%lld\n", c, b,
-             (long long)c - b / 1000 * 24); /* 24 ticks a microsecond */
+    snprintf(line, sizeof(line), "clock cntfrq=%llu cntvct=%llu boottime_ns=%lld boottime0_cnt=%lld\n", f, c, b,
+             boottime0(c, b, f));
     put(fd, line);
 
     while (!stop) {
