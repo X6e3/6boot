@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 """Check a heartbeat log (heartbeat.c) and say what it shows about the counter.
 
-    check_heartbeat.py LOG [--armed CNT] [--stopped]
+    check_heartbeat.py LOG [--armed CNT] [--stopped] [--opened-by COMM]
 
 - the counter's rate: CNTFRQ_EL0 as the header logs it, against the rate the lines themselves show
   (delta CNTVCT over delta CLOCK_BOOTTIME); they must agree within 0.1%. A log from before the header
@@ -10,10 +10,17 @@
   for 24 MHz: it is recomputed here and not trusted.
 - where CLOCK_BOOTTIME 0 falls on the counter, from every line; they must agree within 1 ms.
 - the counter and CLOCK_BOOTTIME only go up.
-- with --armed (xboot,watchdog's cntpct): the first and last heartbeat after the watchdog was armed.
-  The last heartbeat is the last that reached the disk, not the reset itself.
+- the kernel log's clock (the marks): where its 0 falls on the counter, from every mark; they must agree
+  within 1 ms, which also says the kernel log's clock keeps to the counter. The kernel's watchdog records
+  are then put on the counter too. A mark ties the two clocks to within its own width (the two counter
+  reads around the write), and a record's timestamp is when the kernel logged it, not when the thing it
+  describes happened.
+- who had the watchdog open (the w lines), over every check.
+- with --armed (xboot,watchdog's cntpct): the first and last heartbeat, and the kernel's watchdog records,
+  after the watchdog was armed. The last heartbeat is the last that reached the disk, not the reset itself.
 - with --stopped: the log must end with "stopped" (a clean stop, as in the host test).
-Also a check of the boottime0 arithmetic on fixed values (24 MHz and 1 GHz). Exit 1 on any failure.
+- with --opened-by COMM (the host test): COMM must be seen holding the watchdog, and then nobody.
+Also a check of the arithmetic on fixed values (24 MHz and 1 GHz). Exit 1 on any failure.
 """
 import argparse
 import re
@@ -24,6 +31,11 @@ def boottime0(cnt, boot_ns, frq):
     return cnt - boot_ns * frq // 1_000_000_000
 
 
+def kernel0(us, c1, c2, frq):
+    """the counter value at the kernel log's 0, from one mark"""
+    return (c1 + c2) // 2 - us * frq // 1_000_000
+
+
 def arithmetic():
     # 1 GHz: the J713's 9D-a header, cntvct and boottime_ns as logged
     assert boottime0(16405620797, 1872361499, 1_000_000_000) == 14533259298
@@ -31,6 +43,10 @@ def arithmetic():
     assert boottime0(100_000_000, 2_000_000_000, 24_000_000) == 52_000_000
     # a long uptime does not overflow (Python ints do not; the C side uses __int128)
     assert boottime0(10**18, 10**17, 1_000_000_000) == 9 * 10**17
+    # a mark at kernel 3 s, written between counter 5e9 and 5e9+2000 at 1 GHz: kernel 0 at 2e9+1000
+    assert kernel0(3_000_000, 5_000_000_000, 5_000_002_000, 1_000_000_000) == 2_000_001_000
+    # 24 MHz: kernel 1 s at counter 30e6 puts kernel 0 at 6e6
+    assert kernel0(1_000_000, 30_000_000, 30_000_000, 24_000_000) == 6_000_000
 
 
 def main():
@@ -38,6 +54,7 @@ def main():
     ap.add_argument("log")
     ap.add_argument("--armed", type=int)
     ap.add_argument("--stopped", action="store_true")
+    ap.add_argument("--opened-by")
     a = ap.parse_args()
     arithmetic()
     text = open(a.log, errors="replace").read()
@@ -74,6 +91,67 @@ def main():
         bad.append("the header's boottime0_cnt disagrees with the lines")
     if any(x[0] <= y[0] or x[1] <= y[1] for y, x in zip(ts, ts[1:])):
         bad.append("counter or CLOCK_BOOTTIME does not only go up")
+
+    # the kernel log: marks, then its watchdog records on the counter
+    marks = [tuple(int(x) for x in l.split()[1:4]) for l in lines if re.match(r"m \d+ \d+ \d+$", l)]
+    failed = [l for l in lines if l.startswith("m - ")]
+    kerr = next((l for l in lines if l.startswith("kmsg: ")), None)
+    k0 = None
+    if kerr:
+        print(f"kernel log: not read ({kerr[6:]})")
+    elif marks:
+        z = [kernel0(us, x, y, frq) for us, x, y in marks]
+        k0 = min(z)
+        kspread = (max(z) - min(z)) / frq
+        width = max(y - x for _, x, y in marks) / frq
+        print(f"kernel log clock 0 on the counter: {k0} ({k0 / frq:.3f} s), spread over {len(marks)} marks"
+              f" {kspread * 1e3:.3f} ms, widest mark {width * 1e6:.1f} us")
+        print(f"kernel log clock 0 - CLOCK_BOOTTIME 0: {(k0 - min(zero)) / frq * 1e3:.3f} ms")
+        if kspread > 1e-3:
+            bad.append("the kernel log's clock does not keep to the counter (marks disagree by more than 1 ms)")
+    elif any(l.startswith(("kfirst ", "k ")) for l in lines) or failed:
+        bad.append("kernel log read but no mark read back")
+    if failed:
+        print(f"marks not read back: {len(failed)}")
+    first = next((l.split(None, 3) for l in lines if l.startswith("kfirst ")), None)
+    if first:
+        print(f"kernel log: oldest record still there when read: seq {first[1]}"
+              f" ({'nothing lost' if first[1] == '0' else 'the records before it were lost'}): {first[3] if len(first) > 3 else ''}")
+    lost = sum(l == "klost" for l in lines)
+    if lost:
+        print(f"kernel log: records overwritten before they were read: {lost} times")
+    krec = [l.split(None, 3) for l in lines if l.startswith("k ")]
+    if krec:
+        print(f"kernel log records about a watchdog: {len(krec)}")
+    for r in krec:
+        us, msg = int(r[2]), r[3] if len(r) > 3 else ""
+        if k0 is not None and a.armed is not None:
+            at = f"armed +{(k0 + us * frq // 1_000_000 - a.armed) / frq:8.3f} s"
+        else:
+            at = f"kernel {us / 1e6:10.6f} s"
+        print(f"  {at}  {msg}")
+        m = re.search(r"probe of (\S+) returned (-?\d+) after (\d+) usecs", msg)
+        if m and "watchdog" in m.group(1) and k0 is not None:
+            p = k0 + us * frq // 1_000_000
+            print(f"  {'':16s}  -> last heartbeat: {(c1 - p) / frq:.3f} s after this record")
+
+    # who had the watchdog open
+    w = [l.split(None, 3) for l in lines if l.startswith("w ")]
+    if not w:
+        print("watchdog open checks: none in this log (heartbeat before they were logged)")
+    else:
+        held = [x for x in w if len(x) > 3 and x[3] != "none"]
+        if not held:
+            print(f"watchdog open in user space: nobody, at every check ({len(ts)} checks)")
+        for x in w:
+            print(f"  w {int(x[2]) / 1e9:9.3f} s boottime: {x[3] if len(x) > 3 else ''}")
+        if a.opened_by:
+            by = [i for i, x in enumerate(w) if len(x) > 3 and f"comm={a.opened_by} " in x[3] + " "]
+            if not by or not any(len(x) > 3 and x[3] == "none" for x in w[by[0] + 1:]):
+                bad.append(f"{a.opened_by} not seen holding the watchdog and then letting go")
+    if a.opened_by and not w:
+        bad.append("no watchdog open checks")
+
     if a.armed is not None:
         print(f"watchdog armed -> CLOCK_BOOTTIME 0: {(min(zero) - a.armed) / frq:.3f} s")
         print(f"watchdog armed -> first heartbeat: {(c0 - a.armed) / frq:.3f} s")
