@@ -58,10 +58,51 @@ the known image without anyone choosing it. Root on the NVMe worked after both b
 The check took 0.94 s on boot 1 (the 21 MB trial read in 4096-byte commands and hashed, then the write) against
 41 ms without a trial; the die stands still during it.
 
+## 17 November 2026: the watchdog resets a trial that Linux never takes over (9D-a)
+
+Stage 2 `6boot-p32-user-l2w-j713` (4cdfb38, `SIXBOOT_LEVEL2_WATCHDOG`; stage 2 sha256 `8bf6c6b0`), in
+`M1N1/BOOT.BIN` `4271f78c` over the R5 payload; `BOOT-PREV.BIN` and `BOOT-RESCUE.BIN` R5 `3c9c2ef2`. Once the
+trial is loaded it arms the primary watchdog for 60 s of its 24 MHz clock. The trial `b4e1560b` is the R5 payload
+with `x6e3.v=6boot-r5-trial-9da`, `x6e3.hb=1` (the heartbeat, `tests/watchdog/heartbeat.c`) and
+`initcall_blacklist=apple_wdt_driver_init`, so Linux's watchdog driver never registers and nothing feeds the
+watchdog. The blacklist works on this kernel: `module_platform_driver()` names the initcall
+`apple_wdt_driver_init`, `do_one_initcall()` checks it by its kallsyms name, and the R5 build has `CONFIG_KALLSYMS=y`,
+no LTO and `apple_wdt_driver_init` in its `System.map`; its `Image.gz` is byte for byte the kernel in R5.
+
+**Boot 1**: 6boot chose the trial, spent its try (`wrote=1 err=0`, block 58205527), booted it and armed the
+watchdog: `xboot,watchdog = armed=60 s at cntpct=13058109843`. Linux: `x6e3.v=6boot-r5-trial-9da`, no
+`/dev/watchdog0`, the `apple-watchdog` driver not registered. Nobody touched the machine. It reset by itself.
+
+**Boot 2**: `x6e3.v=6boot-r5-tm-root2`, `xboot,path = known`, `xboot,trial = trial-failed`, `write=0 wrote=0 wdt=0`,
+`xboot,watchdog = off`; the record 0 tries of 1, sequence 3; `esp-check` from the raw disk: `trial-failed`.
+
+So on the machine: 6boot's own watchdog reset a trial that never handed it to Linux, without the power button,
+and the boot after it went back to the known image.
+
+What boot 1 left behind:
+
+- The heartbeat log: 112 lines over 55.553 s of `CLOCK_BOOTTIME`, no `stopped` line (a shutdown writes one); the
+  journal of boot 1 has no shutdown line either. Its last entry is at 24.14 s (`Startup finished`), so the journal
+  does not show when the boot ended.
+- The counter: the lines give 1,000,000,000.74 Hz (delta `CNTVCT_EL0` over delta `CLOCK_BOOTTIME`), the M4's
+  `CNTFRQ_EL0` of 1 GHz, not the watchdog's 24 MHz. On that counter, measured from the arming: `CLOCK_BOOTTIME`
+  0 at 1.475 s, the first heartbeat at 3.348 s, the last at 58.901 s. The reset came after the last heartbeat that
+  reached the disk; its exact time was not measured.
+- These times assume that Linux's `CNTVCT_EL0` and the `CNTPCT_EL0` 6boot read are the same count. Linux at EL2
+  clears `CNTVOFF_EL2` (`arch/arm64/include/asm/el2_setup.h`), and `CLOCK_BOOTTIME` 0 falling 1.475 s after the
+  arming fits it; it has not been checked on the machine on its own.
+- Not explained: over the same lines `CLOCK_REALTIME` moved 73.498 s while `CLOCK_BOOTTIME` moved 55.553 s.
+
+The first check report of this run divided the counter by 24 MHz and gave 139.48 s and 2454.19 s; the heartbeat's
+own header (`boottime0_cnt`) had the same mistake. The check now takes the rate from the lines, and the heartbeat
+logs `CNTFRQ_EL0` and computes `boottime0_cnt` from it (`tests/watchdog/check_heartbeat.py` checks both). The stage
+2 that ran is unaffected: it arms the watchdog in its own 24 MHz ticks, and a 1 GHz reading would have reset the
+trial 1.44 s after the arming, before Linux.
+
 ## Not yet run on the machine
 
-- The watchdog: no stage 2 arms it yet. A trial that hangs before Linux would need the power button; the boot
-  after that would still go back, because the try is spent before the trial starts, but that has not been run.
+- The watchdog with Linux's driver: a trial whose `apple_wdt` takes the watchdog over and whose user space never
+  opens it within `watchdog.open_timeout` (9D-b).
 - A write that fails, is lost, is torn or is not flushed: only on the host (`esp_fixture_test.py`).
 - A trial that is marked good (promote) and the record set back to idle from Linux.
 - Recovery from REL3.
@@ -78,6 +119,18 @@ ce36706afd2eb5db3aea433c147a30a848b98fee27ce1684d1d637b20f7c55fd  onucus.txt
 903cb3db5cb4e7adcc5523624d2172722ef99e4aa260372384f8268025180c7e  rapor-9c-2-20261116T231021Z.txt
 ```
 
-In the two after-boot reports the script's own read-only mount of the ESP failed, because the ESP was already
+9D-a (17 November):
+
+```
+2ab7c5a0ed97aa7a03c994b57feebd723e47eaab1fdf014155e6b0bcf20ea218  rapor-9da-hazirla-20261116T235012Z.txt
+aea5ebc90706180629beb7fef4c93d96564d31e60be747ae0235557eaaec3dc4  onucus-9da.txt
+014c7fe8e5fe7d618e098c3ce93954bce63f6ee1ebcb9e05e5231578e23b183d  heartbeat-9da.log
+ead088c8d5460c41995c3c686bd3a0461097a286878caf287c4a1c5325c21876  rapor-9da-kontrol-20261116T235349Z.txt
+7b68561fd1a3c435d4aa2b37cd898744e6b397c8687891e486e8d11a1b82d92c  rapor-9da-kontrol-20261116T235840Z.txt
+```
+
+The first 9D-a check report is the one with the 24 MHz mistake; the second is after the fix.
+
+In the two after-boot reports of 9C the script's own read-only mount of the ESP failed, because the ESP was already
 mounted at `/boot`; their file hashes are missing for that reason. The record was read through `/boot` instead,
 and `esp-check` read it from the raw disk.
