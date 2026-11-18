@@ -158,11 +158,29 @@ trial 1.44 s after the arming, before Linux.
   files say 08:24:42 on that basis, while the trial's last heartbeat says 08:25:10 on the synced basis. Wall clocks
   from before a boot's sync cannot be compared across boots.
 
+**Deviation from the runbook (told by Can on 18 November, after the run).** The runbook said to touch nothing
+during boot 1. Out of habit, Can opened KRDC and a terminal while the trial was running. What ran in the terminal,
+and when, is not yet recorded. What the records say about it:
+- **Nobody opened `/dev/watchdog`.** The heartbeat checks every 0.5 s and logs a `w` line on every change; there is
+  one line, "none", and it never changed. The journal has no "did not stop", which an open without magic close
+  would have left.
+  - An open and a magic close inside 0.5 s would have stopped the watchdog. The machine reset anyway, at the time
+    the source model gives.
+  - User space has no other way to feed it: `CONFIG_WATCHDOG_SYSFS` is off.
+- **The heartbeat was not disturbed.** The interval median was 503.6 ms in every 10 s window from A + 10 s to the end,
+  and the largest interval was 516 ms (in the first 10 s).
+- **The timing rules out an early hang.** The kernel feeds stop at R + 90 s whatever user space does, so a hang after
+  that point would not move the reset. The heartbeat lived to R + 118.7 s, so no hang came before it.
+
+The main results stand for these reasons, but the run was not untouched. A repeat with nothing touched would remove
+the question.
+
 **Not shown:**
 - the feeding;
 - the moment of the reset;
 - what reset the machine (a watchdog bite is the only cause consistent with every record, but no record says so);
-- what the disk lost.
+- what the disk lost;
+- what the terminal and KRDC did during boot 1.
 
 ## 9D-b telemetry: prepared, not run (18 November 2026)
 
