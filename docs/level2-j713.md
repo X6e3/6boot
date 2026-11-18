@@ -159,8 +159,9 @@ trial 1.44 s after the arming, before Linux.
   from before a boot's sync cannot be compared across boots.
 
 **Deviation from the runbook (told by Can on 18 November, after the run).** The runbook said to touch nothing
-during boot 1. Out of habit, Can opened KRDC and a terminal while the trial was running. What ran in the terminal,
-and when, is not yet recorded. What the records say about it:
+during boot 1. Out of habit, Can opened KRDC and connected while the trial was running, then opened a terminal.
+In his account he typed no command and mounted nothing; this is not checked against the boot's journal or shell
+history. What the records say about it:
 - **Nobody opened `/dev/watchdog`.** The heartbeat checks every 0.5 s and logs a `w` line on every change; there is
   one line, "none", and it never changed. The journal has no "did not stop", which an open without magic close
   would have left.
@@ -180,7 +181,7 @@ the question.
 - the moment of the reset;
 - what reset the machine (a watchdog bite is the only cause consistent with every record, but no record says so);
 - what the disk lost;
-- what the terminal and KRDC did during boot 1.
+- that KRDC and the terminal did nothing else (Can's account only).
 
 ## 9D-b telemetry: prepared, not run (18 November 2026)
 
