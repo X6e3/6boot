@@ -5,7 +5,8 @@
     python3 -I test_check_heartbeat.py
 
 - the J713's 9D-a log (fixtures/heartbeat-9da.log, sha256 as in docs/level2-j713.md) still checks as before,
-  and its wall clock step is flagged;
+  and its wall clock step is flagged; the two 9D-b logs (fixtures/heartbeat-9db-1.log, -2.log): the second
+  one's CLOCK_BOOTTIME was slewed by NTP (3.8 ms from about 69 s), a WARN and not a failure;
 - a 9D-b-like log at 1 GHz (6boot arms at A, the driver's set_timeout at R = A + 2 s, pings every 15 s until
   R + 90 s, nobody opens it): six zeroings 15 s apart, the prediction at R + 120 s, and the next boot's wall
   clock inside or outside the window;
@@ -104,6 +105,34 @@ class NineDA(unittest.TestCase):
         self.assertIn("+17.945 s between boottime 35.918 and 36.419 s", js["flags"][0]["text"])
 
 
+class NineDBOnTheJ713(unittest.TestCase):
+    """the two physical 9D-b runs (18 Nov); the second one's CLOCK_BOOTTIME was slewed by NTP"""
+
+    def fixture(self, name, sha):
+        path = os.path.join(HERE, "fixtures", name)
+        with open(path, "rb") as f:
+            data = f.read()
+        self.assertEqual(hashlib.sha256(data).hexdigest(), sha)
+        return data.decode()
+
+    def test_first_run(self):
+        rc, out, js = run(self.fixture("heartbeat-9db-1.log", "04b2ca3e30f7450a35e4e5f17463c1b225ec1c0239b3d9fd50a154ba997cdc4e"))
+        self.assertEqual(rc, 0)
+        self.assertIn("watchdog armed -> last heartbeat:  120.471 s", out)
+        self.assertEqual([f["code"] for f in js["flags"]], ["realtime_step"])
+
+    def test_second_run_ntp_slew_is_a_warning_not_a_failure(self):
+        rc, out, js = run(self.fixture("heartbeat-9db-2.log", "e8affee8be0a547bb02cbd2d9c5188bf2e73da6b100ec100d2930b402a92fbdb"))
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(sorted(f["code"] for f in js["flags"]), ["boottime_slew", "realtime_step"])
+        sl = js["data"]["boottime_slew"]
+        self.assertAlmostEqual(sl["gained_s"], 3.776e-3, delta=2e-6)
+        self.assertGreater(sl["from_boottime_s"], 67)
+        self.assertLess(sl["max_ppm"], 1000)
+        self.assertIn("watchdog armed -> last heartbeat:  121.731 s", out)
+        self.assertIn("CLOCK_BOOTTIME moved, not the counter", out)
+
+
 class NineDB(unittest.TestCase):
     def test_feeds_spacing_and_prediction(self):
         A, R, lines = ninedb()
@@ -170,6 +199,25 @@ class Broken(unittest.TestCase):
         f = lines[i].split()
         lines[i] = " ".join(["t", f[1], str(int(f[2]) + 5_000_000)] + f[3:])
         self.assertIn(("FAIL", "boottime"), self.codes(lines)[1])
+
+    def test_boottime_slew_within_ntp_is_a_warning(self):
+        _, _, lines = ninedb(end_s=40)
+        ts = [i for i, l in enumerate(lines) if l.startswith("t ")]
+        for n, i in enumerate(ts[20:], 1):                        # BOOTTIME runs 200 ppm fast from line 20
+            f = lines[i].split()
+            lines[i] = " ".join(["t", f[1], str(int(f[2]) + n * 100_000)] + f[3:])
+        rc, c = self.codes(lines)
+        self.assertEqual((rc, c), (0, [("WARN", "boottime_slew")]))
+
+    def test_boottime_faster_than_ntp_fails(self):
+        _, _, lines = ninedb(end_s=40)
+        ts = [i for i, l in enumerate(lines) if l.startswith("t ")]
+        for n, i in enumerate(ts[20:], 1):                        # 2000 ppm: no slew does that
+            f = lines[i].split()
+            lines[i] = " ".join(["t", f[1], str(int(f[2]) + n * 1_000_000)] + f[3:])
+        rc, c = self.codes(lines)
+        self.assertEqual(rc, 1)
+        self.assertIn(("FAIL", "boottime"), c)
 
     def test_slow_read(self):
         _, _, lines = ninedb(end_s=10, read_us=1500)

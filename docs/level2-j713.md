@@ -184,6 +184,46 @@ the question.
 - what the disk lost;
 - that KRDC and the terminal did nothing else (Can's account only).
 
+### The same trial again, nothing touched (18 November, about 08:56–09:00 +03)
+
+Can ran the same package again so that the deviation above would not be the only record.
+- **Boot 1:**
+  - 6boot spent the try (`wrote=1 err=0`, block 58215909) and armed for 60 s at A = 12128020514.
+  - `apple_wdt` probed at A + 1.829 s. The record is in the heartbeat's kernel log copy and in survey
+    `0322-...-3c4e6b13`.
+  - Nobody opened `/dev/watchdog` (234 checks), and there is no "did not stop".
+  - The last heartbeat on disk is at **A + 121.731 s = R + 119.902 s**.
+  - The journal has the automatic login (sddm autologin, Plasma) and no KRDC. KRDC may not write to the journal,
+    so this is consistent with Can's account and does not prove it.
+- **Boot 2:** `path = known`, `trial = trial-failed`, `write=0`; the record shows try 0/1, seq 5; `esp-check`
+  says `reason=trial-failed`; survey 323 follows the trial's 322.
+- **Against the source model's reset at R + 120 s:** the last line is 0.098 s before it, against 1.296 s in the
+  first run. Both are within the delayed-flush window, and neither is a measurement of the reset.
+
+| run | the driver probed | the last heartbeat | before R + 120 s |
+|---|---|---|---|
+| first (KRDC, terminal) | A + 1.767 s | A + 120.471 s | 1.296 s |
+| second (nothing touched) | A + 1.829 s | A + 121.731 s | 0.098 s |
+
+**The kit's check failed the second run, and the check was wrong.** `check_heartbeat.py` in `oturum9db`
+(17 November) failed it with "CLOCK_BOOTTIME 0 moves on the counter by more than 1 ms" and "the header's
+boottime0_cnt disagrees with the lines". It reported 999968098 Hz as the counter's measured frequency.
+- **What happened:** CLOCK_BOOTTIME kept to the counter within about 1 µs until boottime about 68 s, then ran ahead
+  of it. The rate started near 230 ppm and decayed, and it had gained 3.776 ms by the end. That is the kernel's NTP
+  loop slewing the clock (adjtimex). It started about 32 s after timesyncd's first synchronization at 36.04 s,
+  where its next poll would be; timesyncd does not log that poll.
+- **The counter did not move.** The kernel log's clock (sched_clock, which NTP does not slew) kept to the counter
+  within 3.9 µs over all 12 marks.
+- **The kit's check had two errors:** it assumed CLOCK_BOOTTIME runs with the counter, and its "measured frequency"
+  was counter ticks per CLOCK_BOOTTIME second.
+- **The fix:** the check in this repository now treats a move of CLOCK_BOOTTIME as an NTP slew. It is a WARN with
+  its size, start and largest rate, and only a rate over 1000 ppm is a FAIL. It uses the counter for every time, and
+  takes CLOCK_BOOTTIME 0 from the first line.
+- **Nothing on the machine changed between the two runs.** The 17 files of `oturum9db` matched their sums before
+  and after. The kit's copy of the check is left as it was, as a record of what ran.
+- With the fix, both runs pass. The first has one WARN (the wall clock step); the second has two (the slew and the
+  step).
+
 ## 9D-b telemetry: prepared, not run (18 November 2026)
 
 Nothing below ran on the J713. It is the heartbeat and the check that a later 9D-b would use, tested in the build
@@ -363,6 +403,8 @@ The first 9D-a check report is the one with the 24 MHz mistake; the second is af
 9D-b (18 November), session folder `oturum9db`; the evidence copied by Can into `kanit-9db/` with its own sums
 (`SHA256SUMS-9DB.txt`, 35 files, all matching on the Mac):
 
+The first run:
+
 ```
 1926952802abb436acc50564bdff2f95b99292adb2a5c0e265d9b163587af8ea  rapor-9db-hazirla-20261118T051802Z.txt
 cd94a9c619b49ca506efc1b11de41ddf8b48e5efd12e9b8057e4b85823e9e74b  onucus-9db.txt
@@ -372,6 +414,19 @@ cd94a9c619b49ca506efc1b11de41ddf8b48e5efd12e9b8057e4b85823e9e74b  onucus-9db.txt
 38c2873cba647aeff206ead8780b5c3ff16b61452491fd66fd85009c7ea46f94  kanit-9db/journal-trial-k.txt
 4828b3ef0fbc30a100e53e0ac31521a853bd8fe9ef925a8cb4605cc20b6a427e  kanit-9db/journal-known-k.txt
 d9ec0259b44d97eb3ebcafe2a51e831b399423845757a502591c7be233d6bc5d  esp-before-9db.img
+```
+
+The second run (`kanit-9db-2/`, `SHA256SUMS-9DB-2.txt`, 37 files, all matching on the Mac). `onucus-9db.txt` and
+`esp-before-9db.img` in the session folder were rewritten by its preparation:
+
+```
+741602719d2f8b5cf7c5bbd3e6f17f3d4cb8ae7a0873bb62116b5948f6b5a767  rapor-9db-hazirla-20261118T055655Z.txt
+fa0b5820c44850e91119754687cc86ffc557b3d7dd2d5fcd103d7d6933956f9e  rapor-9db-kontrol-20261118T060048Z.txt
+0eec5ba227bf42cac7a6b230732cfe27dfffdc426a3b0271929d4d0add9516e4  onucus-9db.txt
+8e8ac92d1a9b3678dc517674c9892ce292b7b92d63fb59b7c563588be90e89b5  kanit-9db-2/SHA256SUMS-9DB-2.txt
+e8affee8be0a547bb02cbd2d9c5188bf2e73da6b100ec100d2930b402a92fbdb  kanit-9db-2/3c4e6b13-df05-442b-9bca-0aa8ae2abf48.log
+c836555d827dc327cd271d5e6d572fdd8440a737b15b8c7213feee54a7c0f85f  kanit-9db-2/journal-trial.txt
+ea66b555f36e4eeae7c59a8f54abbe5a4b9db9c5908303564d95f872ef0b48fb  kanit-9db-2/journal-known.txt
 ```
 
 In the two after-boot reports of 9C the script's own read-only mount of the ESP failed, because the ESP was already

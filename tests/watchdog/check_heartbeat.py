@@ -18,7 +18,9 @@ The log itself: every line must be one the heartbeat writes. Unreadable lines at
 The log's own clocks:
 - the counter (CNTVCT_EL0): its rate is CNTFRQ_EL0 as the header logs it; the lines must show the same
   rate within 0.1 %. A log from before the header carried cntfrq (9D-a) has only the measured rate.
-- CLOCK_BOOTTIME: where its 0 falls on the counter, from every line; within 1 ms (FAIL).
+- CLOCK_BOOTTIME: where its 0 falls on the counter, from every line. NTP slews CLOCK_BOOTTIME (adjtimex) and not
+  the counter, so a move of more than 1 ms is a WARN with its size, start and largest rate; a rate over 1000 ppm,
+  more than a slew, is a FAIL. With kernel log marks, the kernel's own clock (not slewed) shows which one moved.
 - the counter and CLOCK_BOOTTIME only go up (FAIL); heartbeat gaps over --gap-s (1.5 s) are a WARN.
 - CLOCK_REALTIME: steps over 50 ms are a WARN; the wall clock is tied to the counter only between steps.
 - the kernel log's clock (the marks); who had the watchdog open (the w lines); failed writes (e lines).
@@ -255,7 +257,8 @@ def check_time(p, rep, a):
         return None
     measured = (c1 - c0) * 1e9 / (b1 - b0)
     print(f"heartbeats: {len(ts)} over {(b1 - b0) / 1e9:.3f} s of CLOCK_BOOTTIME")
-    print(f"counter rate measured from the lines: {measured:.2f} Hz")
+    print(f"counter ticks per second of CLOCK_BOOTTIME: {measured:.2f} (CLOCK_BOOTTIME is NTP-disciplined, so this is"
+          " the counter against it, not the counter alone)")
     hdr = p["clock"]
     if "cntfrq" in hdr:
         frq = int(hdr["cntfrq"])
@@ -269,13 +272,26 @@ def check_time(p, rep, a):
         print("header has no cntfrq (written before it was logged): rate taken from the lines, header boottime0_cnt"
               " not used (it assumed 24 MHz)")
     zero = [boottime0(c, b, frq) for c, b, _ in ts]
-    z0 = min(zero)
-    spread = (max(zero) - z0) / frq
-    print(f"CLOCK_BOOTTIME 0 on the counter: {z0} ({z0 / frq:.3f} s), spread over the lines {spread * 1e3:.3f} ms")
+    z0 = zero[0]                                    # from the first line, before any NTP slew of CLOCK_BOOTTIME
+    spread = (max(zero) - min(zero)) / frq
+    print(f"CLOCK_BOOTTIME 0 on the counter: {z0} ({z0 / frq:.3f} s) from the first line; over the lines it moves"
+          f" {spread * 1e3:.3f} ms")
     if spread > 1e-3:
-        rep.fail("boottime", "CLOCK_BOOTTIME 0 moves on the counter by more than 1 ms")
+        # CLOCK_BOOTTIME (like MONOTONIC and REALTIME) is slewed by NTP through adjtimex; the counter is not.
+        gained = [(z0 - z) / frq for z in zero]     # how far CLOCK_BOOTTIME ran ahead of the counter, s
+        start = next(i for i, g in enumerate(gained) if abs(g) > 1e-4)
+        rates = [abs(gained[i + 5] - gained[i]) / ((ts[i + 5][0] - ts[i][0]) / frq) * 1e6 for i in range(len(ts) - 5)]
+        top = max(rates) if rates else float("inf")
+        text = (f"CLOCK_BOOTTIME ran {gained[-1] * 1e3:+.3f} ms against the counter, from near boottime"
+                f" {ts[start][1] / 1e9:.3f} s, at most {top:.0f} ppm. CLOCK_BOOTTIME is NTP-disciplined (adjtimex slews"
+                f" it); every time in this check is on the counter")
+        if top > 1000:
+            rep.fail("boottime", text + "; faster than an NTP slew (over 1000 ppm)")
+        else:
+            rep.warn("boottime_slew", text)
+        rep.data["boottime_slew"] = {"gained_s": gained[-1], "from_boottime_s": ts[start][1] / 1e9, "max_ppm": top}
     if logged0 is not None and abs(logged0 - z0) > frq // 1000:
-        rep.fail("boottime0_cnt", "the header's boottime0_cnt disagrees with the lines")
+        rep.fail("boottime0_cnt", "the header's boottime0_cnt disagrees with the first line")
     if any(x[0] <= y[0] or x[1] <= y[1] for y, x in zip(ts, ts[1:])):
         rep.fail("monotonic", "counter or CLOCK_BOOTTIME does not only go up")
     gaps = [(y[1] - x[1]) / 1e9 for x, y in zip(ts, ts[1:])]
@@ -756,6 +772,10 @@ def run(a):
         armed = p["armed_6boot"][0]
         print(f"armed: taken from /chosen (cntpct {armed})")
     probe, k0 = check_kernel(p, rep, frq, z0, armed, c_last)
+    if "boottime_slew" in rep.data and len(p["marks"]) > 1:
+        z = [kernel0(us, x, y, frq) for us, x, y in p["marks"]]
+        print(f"  the kernel log's clock, which NTP does not slew, kept to the counter within"
+              f" {(max(z) - min(z)) / frq * 1e6:.1f} us over {len(z)} marks: CLOCK_BOOTTIME moved, not the counter")
     nobody = check_openers(p, rep, a.opened_by, len(p["t"]))
     wdt = None
     if wdt_claim(p, rep):
