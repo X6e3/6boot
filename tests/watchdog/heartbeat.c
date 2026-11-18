@@ -34,16 +34,20 @@
  * nothing is written to it, ever. CUR counts at the watchdog's own clock (24 MHz, clkref) since the last
  * feed, which sets it to 0; the machine resets when CUR reaches BITE while CTRL has RESET_EN (bit 2).
  *
- *   wdt node=<dir> base=0x<phys> size=0x<n> | wdt off (x6e3.hbwdt=0) | wdt none: <why>   (header, once)
+ *   wdt node=<dir> base=0x<phys> size=0x<n> ... | wdt off (no x6e3.hbwdt=1 ...) | wdt none: <why>  (once)
  *   d <CNTVCT_EL0 before> <CNTVCT_EL0 after> <CUR> <BITE> <CTRL hex>                       (each tick)
  *
- * so a feed shows as CUR going down, at counter (after - CUR / 24 MHz); the time left is (BITE - CUR) / 24 MHz.
- * The kernel command line x6e3.hbwdt=0 turns the read off.
+ * so a write of 0 (a feed, or set_timeout, start, restart: apple_wdt.c) shows as CUR going down, at counter
+ * (after - CUR / 24 MHz); the time left is (BITE - CUR) / 24 MHz, a prediction. The read is OFF unless the
+ * kernel command line has x6e3.hbwdt=1: reading MMIO from user space is not known to be safe on the J713
+ * (earlier hard hangs there were MMIO reads of other blocks), so only a test that asks for it does it. The
+ * heartbeat line before each read is on disk first, so a log that ends between a t line and its d line
+ * says the read may not have returned.
  *
- *   heartbeat [DIR [WATCHDOG_PATH_PREFIX [DT_SOC_DIR [MEM_PATH]]]]
+ *   heartbeat [DIR [WATCHDOG_PATH_PREFIX [DT_SOC_DIR [MEM_PATH [CMDLINE_PATH]]]]]
  *
- * (the prefix, /dev/watchdog by default, the device tree directory, /proc/device-tree/soc, and the memory
- * device, /dev/mem, are there for the host test)
+ * (the prefix, /dev/watchdog by default, the device tree directory, /proc/device-tree/soc, the memory
+ * device, /dev/mem, and the command line, /proc/cmdline, are there for the host test)
  */
 #define _GNU_SOURCE
 #include <dirent.h>
@@ -382,6 +386,7 @@ int main(int argc, char **argv)
     const char *wdpath = argc > 2 ? argv[2] : "/dev/watchdog";
     const char *soc = argc > 3 ? argv[3] : "/proc/device-tree/soc";
     const char *mem = argc > 4 ? argv[4] : "/dev/mem";
+    const char *cmdpath = argc > 5 ? argv[5] : "/proc/cmdline";
     char id[64], path[256], line[4096], buf[3800];
     static char seen[4096], now[4096];
     static const char *const chosen[] = {"asahi,m1n1-stage2-version", "xboot,path", "xboot,trial",
@@ -399,7 +404,7 @@ int main(int argc, char **argv)
     }
     snprintf(line, sizeof(line), "boot %s\n", id);
     put(fd, line);
-    slurp("/proc/cmdline", buf, sizeof(buf));
+    slurp(cmdpath, buf, sizeof(buf));
     snprintf(line, sizeof(line), "cmdline %s\n", buf);
     put(fd, line);
     for (size_t i = 0; i < sizeof(chosen) / sizeof(chosen[0]); i++) {
@@ -421,13 +426,13 @@ int main(int argc, char **argv)
     put(fd, line);
     snprintf(line, sizeof(line), "watchdog path prefix: %s\n", wdpath);
     put(fd, line);
-    /* the watchdog's registers, unless the command line says x6e3.hbwdt=0 */
+    /* the watchdog's registers, only if the command line says x6e3.hbwdt=1 */
     volatile const uint32_t *wdt = NULL;
-    slurp("/proc/cmdline", buf, sizeof(buf));
+    slurp(cmdpath, buf, sizeof(buf));
     char padded[sizeof(buf) + 3];
     snprintf(padded, sizeof(padded), " %s ", buf);
-    if (strstr(padded, " x6e3.hbwdt=0 ")) {
-        put(fd, "wdt off (x6e3.hbwdt=0)\n");
+    if (!strstr(padded, " x6e3.hbwdt=1 ")) {
+        put(fd, "wdt off (no x6e3.hbwdt=1 on the command line)\n");
     } else {
         wdt = wdt_map(soc, mem, line, sizeof(line));
         put(fd, line);

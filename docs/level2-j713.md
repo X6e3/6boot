@@ -99,10 +99,82 @@ logs `CNTFRQ_EL0` and computes `boottime0_cnt` from it (`tests/watchdog/check_he
 2 that ran is unaffected: it arms the watchdog in its own 24 MHz ticks, and a 1 GHz reading would have reset the
 trial 1.44 s after the arming, before Linux.
 
+## 9D-b telemetry: prepared, not run (18 November 2026)
+
+Nothing below ran on the J713. It is the heartbeat and the check that a later 9D-b would use, tested in the build
+VM only.
+
+**What the heartbeat can add.** It can read the watchdog's own registers (WD1: CUR, BITE, CTRL) every half second
+through `/dev/mem`, read only. The read is **off unless the trial's command line has `x6e3.hbwdt=1`**; the 9D-b
+trial built on 17 November (3276f25e) does not have it. Turning the read on needs a new trial image and its own
+decision.
+
+**Why it is off by default.** Two of the J713's recorded hard hangs were MMIO reads: the 2 November CPU_CONTROL
+read and the 3 November B4 read (docs/AB.md in j713-ane). A read is therefore not safe because it is a read. The
+R5 sources (`src.tar.gz` ad0c99df) say this much about this one, and no more:
+- `apple_wdt.c:37-52`: WD1 is CUR 0x10, BITE 0x14, CTRL 0x1c. CUR counts at the reference clock and "can also be
+  overwritten to any value". The machine resets while CTRL has RESET_EN and CUR >= BITE. IRQ_STATUS is cleared by
+  writing 1, not by reading.
+- The driver reads these registers itself: CTRL at probe (`:186`), CUR and BITE in `get_timeleft` (`:115-116`), and
+  CUR in `restart` (`:136`). It writes CUR = 0 in ping, start, set_timeout and restart (`:71, :90, :100, :128`).
+- The driver maps the block non-posted (`nonposted-mmio` on `soc` in the trial DT, so `ioremap_np`,
+  Device-nGnRnE). `/dev/mem` maps a non-RAM page `pgprot_noncached`, also Device-nGnRnE (`arch/arm64/mm/mmu.c:95`,
+  `pgtable.h:751`). It is the same memory type at the same address.
+- `/dev/mem` allows it: `CONFIG_STRICT_DEVMEM=y` blocks RAM and exclusive regions, `CONFIG_IO_STRICT_DEVMEM` is
+  off, the driver's region is not exclusive (`kernel/resource.c:1884-1925`), and `SECURITY_LOCKDOWN_LSM` is off.
+- The trial DT's watchdog node has no `power-domains`; the clock is the 24 MHz fixed `clkref`.
+- An SError from a user-space read panics (`traps.c:979-983`), and `PANIC_TIMEOUT=0` leaves a panicked kernel
+  sitting there. A read that hangs the fabric does neither: that is what the earlier hangs looked like.
+
+What is **not** shown: that reading WD1 from user space at an arbitrary moment, possibly while the driver writes
+CUR, is harmless on the J713; and that the watchdog still bites when the fabric is hung. 9D-a showed only that it
+bites when nothing feeds it and the machine is otherwise well.
+
+**How a hanging read would show.** The heartbeat line before each read reaches the disk first. A log that ends
+between a `t` line and its `d` line is flagged (`ends_before_read`). A read slower than 1 ms is flagged
+(`slow_read`).
+
+**The chain, and the evidence for each link** (the check prints this for every log):
+
+| link | independent evidence | what it does not show |
+|---|---|---|
+| 1 6boot armed WD1 | 6boot's own `xboot,watchdog` in `/chosen` (armed, at cntpct A) | that the arming took effect before Linux |
+| 2 Linux took it over | initcall_debug's probe record of the watchdog (time on the counter via the marks); header: `/dev/watchdog0`, driver registered; with the read: the first BITE = 30 s x 24 MHz (the driver's set_timeout) instead of 6boot's 60 s | the exact moment R of the takeover (only the probe record's time) |
+| 3 user space did not open it | the `w` lines (every 0.5 s); the journal's "did not stop" count (check script) | an open shorter than 0.5 s |
+| 4 the kernel fed it | with the read: zeroings of CUR, each on the counter with an error bound, and their spacing (15 s in the source model) | who wrote the 0 (any write of 0, or of a small value, looks the same) |
+| 5 feeds stopped | with the read: the last zeroing, then reads with CUR only counting up | — |
+| 6 the heartbeat stopped | the last `t` line on disk: the reset, if any, came after it | the reset itself |
+| 7 reset (PREDICTED) | from the last read: when CUR would reach BITE, with an error bound | anything: it is a prediction |
+| 8 the reset happened, 6boot fell back | the next boot: 6boot's report (path=known, trial-failed, record seq) through `esp-check`; the next boot's wall clock, which `--next-boot-realtime` compares with the prediction | the reset time (the next boot only bounds it from above, coarsely) |
+
+**Clocks.**
+- The counter (CNTVCT, 1 GHz on the M4) is the reference.
+- CLOCK_BOOTTIME must keep to it within 1 ms (FAIL otherwise).
+- CLOCK_REALTIME is used only between its steps. The 9D-a log has one: +17.945 s between BOOTTIME 35.918 and
+  36.419 s, cause unknown, now flagged as a WARN.
+- The watchdog clock is fitted on the counter over stretches without a zeroing. Its rate, spread and largest
+  residual bound every time computed from CUR.
+
+**Tests** (build VM: Fedora aarch64, gcc 16.2.1):
+- `make -C tests/watchdog test`, three times in a row and once as root: the 13 unit tests on written logs, the fake
+  watchdog run and 10 fake scenarios:
+  - feeds, takeover, ctrl, wrap, stall, lowered, fast, pastbite;
+  - gap (SIGSTOP 0.8–2.6 s);
+  - off (no `x6e3.hbwdt=1`).
+- The 9D-a log (fixture, sha256 as below) checks as before: 1.475 / 3.348 / 58.901 s.
+- `gcc -fanalyzer` is clean.
+- Two things the tests taught:
+  - Across a gap, a write of 0 cannot be told from CUR having stopped. The check says "slow" and names both
+    explanations.
+  - A write of a lower value shortly before a read can look like a write of 0. Only a drop larger than the read
+    interval is "lowered".
+- The first VM run, just after the VM booted, failed `cntfrq` and `boottime` in two scenarios. chronyd was setting
+  the clock; the reruns passed. The check is meant to catch exactly that.
+
 ## Not yet run on the machine
 
 - The watchdog with Linux's driver: a trial whose `apple_wdt` takes the watchdog over and whose user space never
-  opens it within `watchdog.open_timeout` (9D-b).
+  opens it within `watchdog.open_timeout` (9D-b), with or without the register read above.
 - A write that fails, is lost, is torn or is not flushed: only on the host (`esp_fixture_test.py`).
 - A trial that is marked good (promote) and the record set back to idle from Linux.
 - Recovery from REL3.
