@@ -691,7 +691,7 @@ def loss(p, rep, a, frq, c_last, pred, name):
                                   " prediction is wrong")
 
 
-def chain(p, rep, frq, armed, probe, nobody, wdt, c_last, trial, nxt, preds, main=None):
+def chain(p, rep, frq, armed, probe, nobody, wdt, c_last, trial, nxt, preds, main=None, inapplicable=()):
     print("chain (what the log and the survey folders hold for each link):")
     cw = p["chosen_wdt"]
     print(f"  1 6boot armed the watchdog:        {'6boot says ' + cw if cw and cw != '(none)' else 'no xboot,watchdog in /chosen'}")
@@ -724,8 +724,8 @@ def chain(p, rep, frq, armed, probe, nobody, wdt, c_last, trial, nxt, preds, mai
         if pr:
             u = (f"+- {pr['uncertainty_s'] * 1e3:.3f} ms (estimated)" if pr["uncertainty_s"] is not None
                  else "(no uncertainty estimate: " + pr["basis"] + ")")
-            if main is not None and pr is not main:
-                u += "; does not apply here (a driver registered and rewrote WD1)"
+            if (main is not None and pr is not main) or name in inapplicable:
+                u += "; does not apply here (a driver registered and took WD1 over)"
             print(f"  7 PREDICTED reset ({name}):{' ' * max(1, 13 - len(name))}{on(pr['cnt'])} {u}")
     if not any(pr for _, pr in preds):
         print("  7 PREDICTED reset:                 none")
@@ -789,7 +789,8 @@ def run(a):
         rep.fail("stopped", "no stopped line")
     trial, nxt = surveys(p, rep, a, frq, k0)
     window(p, rep, a, frq, k0, trial, nxt, c_last, [(main["source"], main)] if main else [])
-    chain(p, rep, frq, armed, probe, nobody, wdt, c_last, trial, nxt, preds, main)
+    chain(p, rep, frq, armed, probe, nobody, wdt, c_last, trial, nxt, preds, main,
+          {"6boot alone"} if driver else ())
     return rep
 
 

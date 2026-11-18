@@ -99,6 +99,71 @@ logs `CNTFRQ_EL0` and computes `boottime0_cnt` from it (`tests/watchdog/check_he
 2 that ran is unaffected: it arms the watchdog in its own 24 MHz ticks, and a 1 GHz reading would have reset the
 trial 1.44 s after the arming, before Linux.
 
+## 18 November 2026: Linux's driver takes the watchdog over, then lets it go (9D-b)
+
+**Setup.**
+- Trial 3276f25e: R5 with `watchdog.open_timeout=120`, `x6e3.hb=1`, `initcall_debug`, `log_buf_len=4M` and
+  `printk.ignore_loglevel=0`; no `initcall_blacklist`.
+- Stage 2 `6boot-p32-user-l2w-j713`; heartbeat v3, without the register read.
+- Prepared on 17 November (session folder `oturum9db`, whose 17 files matched their SHA-256 on 18 November before
+  the run).
+- Run by Can on 18 November, about 08:18–08:26 +03.
+
+**Boot 1:**
+- 6boot chose the trial and spent its try (`wrote=1 err=0`, block 58210733, `us=908087`).
+- It armed the watchdog for 60 s at cntpct A = 12072308434 (`xboot,watchdog`) and booted R5 with its driver.
+- **`apple_wdt` probed:** "probe of 3882b0000.watchdog returned 0 after 59 usecs" at kernel 0.329576 s, which is
+  A + 1.767 s on the counter (the heartbeat's kernel log marks: 12 marks, spread 0.608 ms).
+- **The same record is in the trial's survey (`0319-...-cb08159d/dmesg.txt`)**, and its `iomem.txt` shows
+  3882b0000-3882b3fff claimed by the watchdog. The heartbeat header: `/dev/watchdog0`, driver registered.
+- **Nobody opened `/dev/watchdog`** in user space at any of the 233 checks, and the journal has no "did not stop".
+- **Heartbeats:** 233 over 117.067 s of CLOCK_BOOTTIME; the first at A + 3.404 s, the last on disk at A + 120.471 s.
+  There is no `stopped` line and no shutdown in the journal.
+
+**Boot 2:**
+- `x6e3.v=6boot-r5-tm-root2`, `xboot,path = known`, `xboot,trial = trial-failed`, `write=0 wrote=0 wdt=0`.
+- The record: installed, try 0/1, seq 5.
+- `esp-check`: `boot=own reason=trial-failed`.
+- The survey folder 320 follows the trial's 319.
+
+**What it shows:**
+- **6boot alone would have reset the machine at A + 60.000 s. The heartbeat was alive 60.471 s after that.** Something
+  stopped the 60 s bite after 6boot armed the watchdog. The only candidate in the records is Linux's `apple_wdt`,
+  probed at A + 1.767 s. By the source (`KAYNAK-9DB.txt`), its set_timeout writes CUR 0 and BITE 30 s, and the
+  watchdog core then feeds it while nobody has it open. The feeding itself was not observed: the register read was
+  not part of this run.
+- **By the same source the feeds stop at R + 90 s and the reset comes at R + 120 s:** about A + 121.77 s, with R taken
+  as the probe record's time.
+  - The last heartbeat on disk is 1.296 s before that, so the two heartbeats expected in between are not in the file.
+  - That is consistent with the source and with the delayed NVMe flush losing the last fsync'd lines. Neither the
+    moment of the reset nor the lost lines are measured.
+- **9D-a against 9D-b:**
+
+  | | the driver | the last heartbeat | the source model's reset |
+  |---|---|---|---|
+  | 9D-a | blacklisted | A + 58.901 s | A + 60 s |
+  | 9D-b | took the watchdog over | A + 120.471 s | A + 121.77 s |
+
+  The two last heartbeats are 61.57 s apart; the models are 61.77 s apart. Both logs end 1.1–1.3 s before their
+  model's reset.
+- **6boot found the try spent and booted its own image.**
+
+**The wall clock, explained.**
+- The heartbeat saw it step +18.920 s between boottime 36.368 and 36.872 s. The journal has systemd-timesyncd's
+  "Initial clock synchronization" at kernel 36.497 s, inside that step.
+- 9D-a's +17.945 s step came at the same point of the boot (35.918–36.419 s) and is very likely the same thing; its
+  journal was not kept, so that is not shown.
+- **The J713 has no RTC under R5:** `macsmc-rtc: Failed to locate of_node`, so the driver does not bind. Each boot's
+  clock starts from timesyncd's saved clock file and runs behind until that boot's own sync. The next boot's survey
+  files say 08:24:42 on that basis, while the trial's last heartbeat says 08:25:10 on the synced basis. Wall clocks
+  from before a boot's sync cannot be compared across boots.
+
+**Not shown:**
+- the feeding;
+- the moment of the reset;
+- what reset the machine (a watchdog bite is the only cause consistent with every record, but no record says so);
+- what the disk lost.
+
 ## 9D-b telemetry: prepared, not run (18 November 2026)
 
 Nothing below ran on the J713. It is the heartbeat and the check that a later 9D-b would use, tested in the build
@@ -200,9 +265,11 @@ inside the checker is a FAIL too.
 `iomem.txt`, `findmnt`.
 - `--trial-survey` must be the log's boot with the log's command line.
 - Its files' times say when the survey finished: a sign of life, not the boot's start.
-- `--next-survey` gives the next kernel's start on the wall clock from its RTC line ("setting system clock to ...
-  (EPOCH)", which R5 prints when the RTC module registers, `drivers/rtc/class.c:433-436`; whole seconds, so ±0.5 s).
-  That is the earliest reliable record of that boot, and `--next-boot-realtime` overrides it.
+- `--next-survey` would give the next kernel's start on the wall clock from an RTC line ("setting system clock to
+  ... (EPOCH)", `drivers/rtc/class.c:433-436`; whole seconds, so ±0.5 s). **On the J713 under R5 there is none:**
+  the RTC driver does not bind (9D-b), and a boot's clock is behind until its timesyncd sync. A value for
+  `--next-boot-realtime` must therefore come from after the next boot's sync, converted back to its kernel's
+  start.
 - The window between the last heartbeat and the next kernel is checked against the prediction with an uncertainty
   of every wall clock step in the trial plus 1 s. The two boots' wall clocks need not share a basis: 9D-a's clock
   jumped 17.945 s, and R5 writes the system time back to the RTC (`RTC_SYSTOHC`).
@@ -243,8 +310,8 @@ inside the checker is a FAIL too.
 
 ## Not yet run on the machine
 
-- The watchdog with Linux's driver: a trial whose `apple_wdt` takes the watchdog over and whose user space never
-  opens it within `watchdog.open_timeout` (9D-b), with or without the register read above.
+- 9D-b with the register read above (`x6e3.hbwdt=1`): the feeds and the stop observed rather than inferred.
+- A user space that opens `/dev/watchdog`, and a kernel that hangs or panics after taking the watchdog over.
 - A write that fails, is lost, is torn or is not flushed: only on the host (`esp_fixture_test.py`).
 - A trial that is marked good (promote) and the record set back to idle from Linux.
 - Recovery from REL3.
@@ -272,6 +339,20 @@ ead088c8d5460c41995c3c686bd3a0461097a286878caf287c4a1c5325c21876  rapor-9da-kont
 ```
 
 The first 9D-a check report is the one with the 24 MHz mistake; the second is after the fix.
+
+9D-b (18 November), session folder `oturum9db`; the evidence copied by Can into `kanit-9db/` with its own sums
+(`SHA256SUMS-9DB.txt`, 35 files, all matching on the Mac):
+
+```
+1926952802abb436acc50564bdff2f95b99292adb2a5c0e265d9b163587af8ea  rapor-9db-hazirla-20261118T051802Z.txt
+cd94a9c619b49ca506efc1b11de41ddf8b48e5efd12e9b8057e4b85823e9e74b  onucus-9db.txt
+2635c7ed8295927869f29fd8d4b89b698f31e39e457392c0471b9139ec4b1be0  rapor-9db-kontrol-20261118T052623Z.txt
+98afb6c8c615a393a8e1418e612aaf77e9b34cd73dbc5928a39f8bdf3f80f244  kanit-9db/SHA256SUMS-9DB.txt
+04b2ca3e30f7450a35e4e5f17463c1b225ec1c0239b3d9fd50a154ba997cdc4e  kanit-9db/cb08159d-611c-48da-93a2-34d827545eec.log
+38c2873cba647aeff206ead8780b5c3ff16b61452491fd66fd85009c7ea46f94  kanit-9db/journal-trial-k.txt
+4828b3ef0fbc30a100e53e0ac31521a853bd8fe9ef925a8cb4605cc20b6a427e  kanit-9db/journal-known-k.txt
+d9ec0259b44d97eb3ebcafe2a51e831b399423845757a502591c7be233d6bc5d  esp-before-9db.img
+```
 
 In the two after-boot reports of 9C the script's own read-only mount of the ESP failed, because the ESP was already
 mounted at `/boot`; their file hashes are missing for that reason. The record was read through `/boot` instead,
