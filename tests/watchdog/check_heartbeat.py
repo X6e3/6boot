@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
 """Check a heartbeat log (heartbeat.c) and say what it shows about the counter.
 
-    check_heartbeat.py LOG [--armed CNT] [--stopped] [--opened-by COMM]
+    check_heartbeat.py LOG [--armed CNT] [--stopped] [--opened-by COMM] [--expect-feed]
+                       [--wdt-hz HZ] [--wdt-tol FRACTION]
 
 - the counter's rate: CNTFRQ_EL0 as the header logs it, against the rate the lines themselves show
   (delta CNTVCT over delta CLOCK_BOOTTIME); they must agree within 0.1%. A log from before the header
@@ -20,6 +21,15 @@
   after the watchdog was armed. The last heartbeat is the last that reached the disk, not the reset itself.
 - with --stopped: the log must end with "stopped" (a clean stop, as in the host test).
 - with --opened-by COMM (the host test): COMM must be seen holding the watchdog, and then nobody.
+- the watchdog's own registers (the wdt header and the d lines), when the log has them:
+  - the watchdog clock's rate, from CUR against the counter between reads with no feed in between; it
+    must be --wdt-hz (24 MHz) within --wdt-tol (0.1 %);
+  - every feed (CUR lower than it would have counted to): when it happened, on the counter, as the read
+    after it minus CUR at the watchdog's rate; and the intervals between feeds;
+  - every change of BITE or CTRL (RESET_EN is bit 2);
+  - the time left at the last read, (BITE - CUR) at the watchdog's rate, and so when the watchdog would
+    reset if nothing fed it again. With --armed all of these are on the arming's scale too.
+  - with --expect-feed (the host test): at least one feed.
 Also a check of the arithmetic on fixed values (24 MHz and 1 GHz). Exit 1 on any failure.
 """
 import argparse
@@ -36,6 +46,69 @@ def kernel0(us, c1, c2, frq):
     return (c1 + c2) // 2 - us * frq // 1_000_000
 
 
+def fed_at(c1, c2, cur, frq, hz):
+    """the counter value when CUR was last set to 0, from one read (c1, c2 bracket the register reads)"""
+    return (c1 + c2) // 2 - cur * frq // hz
+
+
+def reset_at(c1, c2, cur, bite, frq, hz):
+    """the counter value at which CUR would reach BITE if nothing fed the watchdog after this read"""
+    return (c1 + c2) // 2 + (bite - cur) * frq // hz
+
+
+def wdt_report(lines, frq, zero0, armed, hz, tol, expect_feed, last_hb, bad):
+    hdr = next((l for l in lines if l.startswith("wdt ")), None)
+    d = [tuple(int(v, 16) if i == 4 else int(v) for i, v in enumerate(l.split()[1:6]))
+         for l in lines if re.match(r"d \d+ \d+ \d+ \d+ [0-9a-f]+$", l)]
+    if hdr is None:
+        print("watchdog registers: not in this log (heartbeat before they were read)")
+        if expect_feed:
+            bad.append("no wdt header")
+        return
+    print(f"watchdog registers: {hdr[4:]}")
+    if not hdr.startswith("wdt node="):
+        if expect_feed:
+            bad.append("watchdog registers not read")
+        return
+    if len(d) < 2:
+        bad.append("watchdog registers mapped but fewer than 2 reads")
+        return
+    on = (lambda c: f"armed +{(c - armed) / frq:9.3f} s") if armed is not None else \
+         (lambda c: f"boottime {(c - zero0) / frq:9.3f} s")
+    width = max(c2 - c1 for c1, c2, *_ in d) / frq
+    print(f"  reads: {len(d)}, widest {width * 1e6:.1f} us")
+    rates = [(y[2] - x[2]) * frq / ((y[0] + y[1] - x[0] - x[1]) / 2) for x, y in zip(d, d[1:])
+             if y[2] >= x[2] and y[3] == x[3]]
+    if rates:
+        rate = sorted(rates)[len(rates) // 2]
+        print(f"  watchdog clock measured from CUR: {rate:.1f} Hz over {len(rates)} intervals (expected {hz})")
+        if abs(rate - hz) > hz * tol:
+            bad.append(f"watchdog clock {rate:.1f} Hz is not {hz} Hz within {tol:.2%}")
+    first = d[0]
+    print(f"  first read ({on((first[0] + first[1]) // 2)}): CUR {first[2]} ({first[2] / hz:.3f} s), BITE {first[3]}"
+          f" ({first[3] / hz:.3f} s), CTRL 0x{first[4]:x} (RESET_EN {'on' if first[4] & 4 else 'off'})")
+    feeds = []
+    for x, y in zip(d, d[1:]):
+        expected = x[2] + (y[0] + y[1] - x[0] - x[1]) // 2 * hz // frq
+        if y[2] < expected - hz // 1000:
+            feeds.append(fed_at(y[0], y[1], y[2], frq, hz))
+        if (y[3], y[4]) != (x[3], x[4]):
+            print(f"  change at {on((y[0] + y[1]) // 2)}: BITE {x[3]} -> {y[3]} ({y[3] / hz:.3f} s),"
+                  f" CTRL 0x{x[4]:x} -> 0x{y[4]:x}")
+    print(f"  feeds seen: {len(feeds)}")
+    for i, f in enumerate(feeds):
+        gap = f"  (+{(f - feeds[i - 1]) / frq:.3f} s)" if i else ""
+        print(f"    feed {i + 1:2d} at {on(f)}{gap}")
+    last = d[-1]
+    r = reset_at(last[0], last[1], last[2], last[3], frq, hz)
+    print(f"  last read ({on((last[0] + last[1]) // 2)}): CUR {last[2] / hz:.3f} s of BITE {last[3] / hz:.3f} s,"
+          f" CTRL 0x{last[4]:x}: {(last[3] - last[2]) / hz:.3f} s left")
+    print(f"  unfed after it, the watchdog resets at {on(r)}"
+          + (f"; the last heartbeat was at {on(last_hb)}" if last_hb is not None else ""))
+    if expect_feed and not feeds:
+        bad.append("no feed seen")
+
+
 def arithmetic():
     # 1 GHz: the J713's 9D-a header, cntvct and boottime_ns as logged
     assert boottime0(16405620797, 1872361499, 1_000_000_000) == 14533259298
@@ -47,6 +120,10 @@ def arithmetic():
     assert kernel0(3_000_000, 5_000_000_000, 5_000_002_000, 1_000_000_000) == 2_000_001_000
     # 24 MHz: kernel 1 s at counter 30e6 puts kernel 0 at 6e6
     assert kernel0(1_000_000, 30_000_000, 30_000_000, 24_000_000) == 6_000_000
+    # a read at 1 GHz counter 100e9 (+-1000) shows CUR 12e6 at 24 MHz: the feed was 0.5 s earlier
+    assert fed_at(100_000_000_000 - 1000, 100_000_000_000 + 1000, 12_000_000, 1_000_000_000, 24_000_000) == 99_500_000_000
+    # BITE 30 s at 24 MHz, CUR 6 s: 24 s left
+    assert reset_at(50_000_000_000, 50_000_000_000, 144_000_000, 720_000_000, 1_000_000_000, 24_000_000) == 74_000_000_000
 
 
 def main():
@@ -55,6 +132,9 @@ def main():
     ap.add_argument("--armed", type=int)
     ap.add_argument("--stopped", action="store_true")
     ap.add_argument("--opened-by")
+    ap.add_argument("--expect-feed", action="store_true")
+    ap.add_argument("--wdt-hz", type=int, default=24_000_000)
+    ap.add_argument("--wdt-tol", type=float, default=1e-3)
     a = ap.parse_args()
     arithmetic()
     text = open(a.log, errors="replace").read()
@@ -151,6 +231,8 @@ def main():
                 bad.append(f"{a.opened_by} not seen holding the watchdog and then letting go")
     if a.opened_by and not w:
         bad.append("no watchdog open checks")
+
+    wdt_report(lines, frq, min(zero), a.armed, a.wdt_hz, a.wdt_tol, a.expect_feed, c1, bad)
 
     if a.armed is not None:
         print(f"watchdog armed -> CLOCK_BOOTTIME 0: {(min(zero) - a.armed) / frq:.3f} s")

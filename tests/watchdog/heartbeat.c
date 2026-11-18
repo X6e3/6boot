@@ -28,9 +28,22 @@
  *   klost                              the kernel log overwrote records before they were read
  *   m <ts us> <CNTVCT_EL0 before> <CNTVCT_EL0 after>   a mark, at the start and then every 10 s
  *
- *   heartbeat [DIR [WATCHDOG_PATH_PREFIX]]
+ * The watchdog's own registers, read only: the primary watchdog (Linux's apple_wdt calls it WD1; 6boot arms
+ * it for a trial) through /dev/mem, every half second right after the t line. Its node is found in the
+ * device tree (/proc/device-tree/soc, compatible apple,t8103-wdt, reg with two address and two size cells);
+ * nothing is written to it, ever. CUR counts at the watchdog's own clock (24 MHz, clkref) since the last
+ * feed, which sets it to 0; the machine resets when CUR reaches BITE while CTRL has RESET_EN (bit 2).
  *
- * (the prefix, /dev/watchdog by default, is there for the host test)
+ *   wdt node=<dir> base=0x<phys> size=0x<n> | wdt off (x6e3.hbwdt=0) | wdt none: <why>   (header, once)
+ *   d <CNTVCT_EL0 before> <CNTVCT_EL0 after> <CUR> <BITE> <CTRL hex>                       (each tick)
+ *
+ * so a feed shows as CUR going down, at counter (after - CUR / 24 MHz); the time left is (BITE - CUR) / 24 MHz.
+ * The kernel command line x6e3.hbwdt=0 turns the read off.
+ *
+ *   heartbeat [DIR [WATCHDOG_PATH_PREFIX [DT_SOC_DIR [MEM_PATH]]]]
+ *
+ * (the prefix, /dev/watchdog by default, the device tree directory, /proc/device-tree/soc, and the memory
+ * device, /dev/mem, are there for the host test)
  */
 #define _GNU_SOURCE
 #include <dirent.h>
@@ -40,6 +53,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdint.h>
+#include <sys/mman.h>
 #include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
@@ -257,10 +272,116 @@ static void kmsg_mark(int kmsg, int fd, int n)
     put(fd, line);
 }
 
+/* WD1 in the watchdog's register block (Linux apple_wdt.c; 6boot wdt.c: COUNT, ALARM, CTL) */
+#define WD1_CUR 0x10
+#define WD1_BITE 0x14
+#define WD1_CTRL 0x1c
+
+/* a whole small file into buf; its length, or -1 */
+static long slurp_bin(const char *path, unsigned char *buf, size_t cap)
+{
+    int f = open(path, O_RDONLY | O_CLOEXEC);
+    if (f < 0)
+        return -1;
+    ssize_t n = read(f, buf, cap);
+    close(f);
+    return n;
+}
+
+static unsigned long long be(const unsigned char *p, int bytes)
+{
+    unsigned long long v = 0;
+    for (int i = 0; i < bytes; i++)
+        v = v << 8 | p[i];
+    return v;
+}
+
+/* does the NUL-separated compatible list hold want */
+static int compatible(const unsigned char *c, long n, const char *want)
+{
+    for (long i = 0; i < n;) {
+        const char *s = (const char *)c + i;
+        size_t l = strnlen(s, (size_t)(n - i));
+        if (l == strlen(want) && !memcmp(s, want, l))
+            return 1;
+        i += (long)l + 1;
+    }
+    return 0;
+}
+
+/*
+ * Map the watchdog's registers read only. On success *regs points at the block and the header line says
+ * where it came from; on failure the header line says why and NULL is returned.
+ */
+static volatile const uint32_t *wdt_map(const char *soc, const char *mem, char *hdr, size_t cap)
+{
+    unsigned char b[64];
+    char p[512], node[300] = "";
+    long na, ns_;
+    snprintf(p, sizeof(p), "%s/#address-cells", soc);
+    na = slurp_bin(p, b, sizeof(b)) == 4 ? (long)be(b, 4) : -1;
+    snprintf(p, sizeof(p), "%s/#size-cells", soc);
+    ns_ = slurp_bin(p, b, sizeof(b)) == 4 ? (long)be(b, 4) : -1;
+    if (na != 2 || ns_ != 2) {
+        snprintf(hdr, cap, "wdt none: %s has no #address-cells = 2 and #size-cells = 2\n", soc);
+        return NULL;
+    }
+    DIR *d = opendir(soc);
+    if (!d) {
+        snprintf(hdr, cap, "wdt none: %s: %s\n", soc, strerror(errno));
+        return NULL;
+    }
+    int found = 0;
+    for (struct dirent *e; (e = readdir(d));) {
+        unsigned char c[256];
+        if (strncmp(e->d_name, "watchdog@", 9))
+            continue;
+        snprintf(p, sizeof(p), "%s/%s/compatible", soc, e->d_name);
+        long n = slurp_bin(p, c, sizeof(c));
+        if (n > 0 && compatible(c, n, "apple,t8103-wdt")) {
+            found++;
+            snprintf(node, sizeof(node), "%s", e->d_name);
+        }
+    }
+    closedir(d);
+    if (found != 1) {
+        snprintf(hdr, cap, "wdt none: %d watchdog nodes with apple,t8103-wdt under %s\n", found, soc);
+        return NULL;
+    }
+    snprintf(p, sizeof(p), "%s/%s/reg", soc, node);
+    if (slurp_bin(p, b, sizeof(b)) < 16) {
+        snprintf(hdr, cap, "wdt none: %s: no reg\n", p);
+        return NULL;
+    }
+    unsigned long long base = be(b, 8), size = be(b + 8, 8);
+    long pg = sysconf(_SC_PAGESIZE);
+    if (size < WD1_CTRL + 4 || pg <= 0) {
+        snprintf(hdr, cap, "wdt none: %s base=0x%llx size=0x%llx too small\n", node, base, size);
+        return NULL;
+    }
+    unsigned long long off = base & ~(unsigned long long)(pg - 1);
+    int fd = open(mem, O_RDONLY | O_SYNC | O_CLOEXEC);
+    if (fd < 0) {
+        snprintf(hdr, cap, "wdt none: %s base=0x%llx: open %s: %s\n", node, base, mem, strerror(errno));
+        return NULL;
+    }
+    size_t len = (size_t)(base - off) + (size_t)pg;
+    void *m = mmap(NULL, len, PROT_READ, MAP_SHARED, fd, (off_t)off);
+    close(fd);
+    if (m == MAP_FAILED) {
+        snprintf(hdr, cap, "wdt none: %s base=0x%llx: mmap %s: %s\n", node, base, mem, strerror(errno));
+        return NULL;
+    }
+    snprintf(hdr, cap, "wdt node=%s base=0x%llx size=0x%llx page=%ld read-only\n", node, base, size, pg);
+    return (volatile const uint32_t *)((char *)m + (base - off));
+}
+
 int main(int argc, char **argv)
 {
     const char *dir = argc > 1 ? argv[1] : "/var/lib/6boot-heartbeat";
     const char *wdpath = argc > 2 ? argv[2] : "/dev/watchdog";
+    const char *soc = argc > 3 ? argv[3] : "/proc/device-tree/soc";
+    const char *mem = argc > 4 ? argv[4] : "/dev/mem";
     char id[64], path[256], line[4096], buf[3800];
     static char seen[4096], now[4096];
     static const char *const chosen[] = {"asahi,m1n1-stage2-version", "xboot,path", "xboot,trial",
@@ -300,6 +421,17 @@ int main(int argc, char **argv)
     put(fd, line);
     snprintf(line, sizeof(line), "watchdog path prefix: %s\n", wdpath);
     put(fd, line);
+    /* the watchdog's registers, unless the command line says x6e3.hbwdt=0 */
+    volatile const uint32_t *wdt = NULL;
+    slurp("/proc/cmdline", buf, sizeof(buf));
+    char padded[sizeof(buf) + 3];
+    snprintf(padded, sizeof(padded), " %s ", buf);
+    if (strstr(padded, " x6e3.hbwdt=0 ")) {
+        put(fd, "wdt off (x6e3.hbwdt=0)\n");
+    } else {
+        wdt = wdt_map(soc, mem, line, sizeof(line));
+        put(fd, line);
+    }
     int kmsg = open("/dev/kmsg", O_RDWR | O_NONBLOCK | O_CLOEXEC);
     if (kmsg < 0) {
         snprintf(line, sizeof(line), "kmsg: %s\n", strerror(errno));
@@ -315,6 +447,13 @@ int main(int argc, char **argv)
         clock_gettime(CLOCK_REALTIME, &r);
         snprintf(line, sizeof(line), "t %llu %lld %lld.%09ld\n", cv, bt, (long long)r.tv_sec, r.tv_nsec);
         put(fd, line);
+        if (wdt) {
+            unsigned long long d1 = cntvct();
+            uint32_t cur = wdt[WD1_CUR / 4], bite = wdt[WD1_BITE / 4], ctrl = wdt[WD1_CTRL / 4];
+            unsigned long long d2 = cntvct();
+            snprintf(line, sizeof(line), "d %llu %llu %u %u %x\n", d1, d2, cur, bite, ctrl);
+            put(fd, line);
+        }
         openers(wdpath, now, sizeof(now));
         if (!tick || strcmp(now, seen)) {
             snprintf(line, sizeof(line), "w %llu %lld%s\n", cv, bt, now);
