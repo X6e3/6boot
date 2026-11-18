@@ -7,6 +7,7 @@ makes of each. Linux on aarch64 (the build VM); no real watchdog, no /dev/mem.
 
 Each scenario: the fake starts, the heartbeat runs about 3.3 s with a command line file that has (or, for
 "off", lacks) x6e3.hbwdt=1, then the check runs with --json and the expectations below are asserted.
+"unavailable" asks for the read with no device tree node to find: the check must FAIL, not pass.
 "gap" stops the heartbeat (SIGSTOP) from 0.8 to 2.6 s: reads are missing, and the two writes of 0 inside
 that window cannot be told from CUR having stopped for a while: the check must say both.
 """
@@ -43,10 +44,10 @@ EXPECT = {
     "lowered": lambda r: codes(r, "WARN") == ["cur_lowered"] and not r["data"]["wdt"]["zeroings"],
     "fast": lambda r: codes(r, "WARN") == ["cur_fast"],
     "pastbite": lambda r: "past_bite" in codes(r, "WARN"),
-    "gap": lambda r: (sorted(codes(r, "WARN")) == ["cur_slow", "gap"] and not r["data"]["wdt"]["zeroings"]
-                      and any("a write of 0 between the reads would also explain it" in f["text"] for f in r["flags"])),
-    "off": lambda r: r["data"]["wdt"]["header"].startswith("wdt off") and r["data"]["wdt"]["reads"] == 0
-                     and not r["flags"],
+    "gap": lambda r: (sorted(codes(r, "WARN")) == ["gap", "possible_zeroing"] and not r["data"]["wdt"]["zeroings"]
+                      and len(r["data"]["wdt"]["possible_zeroings"]) == 1 and not codes(r, "FAIL")),
+    "off": lambda r: r["data"]["wdt_state"] == "off" and "wdt" not in r["data"] and not r["flags"],
+    "unavailable": lambda r: codes(r, "FAIL") == ["wdt_unavailable"] and r["failed"],
 }
 
 
@@ -57,11 +58,12 @@ def scenario(hb, work, name):
     with open(os.path.join(run, "cmdline"), "w") as f:
         f.write("console=tty0 x6e3.hb=1" + ("" if name == "off" else " x6e3.hbwdt=1") + "\n")
     fake = subprocess.Popen([sys.executable, "-I", os.path.join(HERE, "fake_wdt.py"), run, "3.8",
-                             "feeds" if name in ("gap", "off") else name])
+                             "feeds" if name in ("gap", "off", "unavailable") else name])
     while not os.path.exists(os.path.join(run, "fake-wdt.ready")):
         time.sleep(0.01)
     logdir = os.path.join(run, "log")
-    beat = subprocess.Popen([hb, logdir, os.path.join(run, "no-watchdog"), os.path.join(run, "dt", "soc"),
+    soc = os.path.join(run, "no-dt" if name == "unavailable" else "dt", "soc")
+    beat = subprocess.Popen([hb, logdir, os.path.join(run, "no-watchdog"), soc,
                              os.path.join(run, "fake-mem"), os.path.join(run, "cmdline")])
     if name == "gap":
         time.sleep(0.8)

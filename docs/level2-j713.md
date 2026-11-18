@@ -130,46 +130,116 @@ What is **not** shown: that reading WD1 from user space at an arbitrary moment, 
 CUR, is harmless on the J713; and that the watchdog still bites when the fabric is hung. 9D-a showed only that it
 bites when nothing feeds it and the machine is otherwise well.
 
-**How a hanging read would show.** The heartbeat line before each read reaches the disk first. A log that ends
-between a `t` line and its `d` line is flagged (`ends_before_read`). A read slower than 1 ms is flagged
+**Measuring the read.** The two counter reads around the register loads are ordered against them (the
+architecture lets a counter read move past loads): `isb; mrs` and a load that depends on the value then `dmb ld`
+(Linux's `arch_counter_enforce_ordering`, `barrier.h:116`) before, `dsb ld; isb; mrs` after. The disassembly of
+the binary shows exactly that around the three loads. This orders the measurement. It does not make the read safe.
+
+**How a hanging read would show.** The heartbeat line before each read is written and fsynced first. A log that
+ends between a `t` line and its `d` line is flagged (`ends_before_read`), and so is a read slower than 1 ms
 (`slow_read`).
+
+**What a line on disk means.** put() writes a line and fsyncs it, so a line found in the file was written when its
+counter says. The converse does not hold. In R5 the Apple NVMe driver completes a flush that comes within 1 s of
+the previous one without sending it to the drive (`drivers/nvme/host/apple.c:781-798, 837-840`,
+`flush_interval = 1000` ms), so fsync can return while the line is still in the drive's cache. A reset can lose
+about the last second of lines that fsync reported done, and at worst leave a torn tail.
+- The last line is when the heartbeat was alive, not when it stopped.
+- The check compares it with the prediction that applies: a gap up to 1 s plus two intervals is "consistent with
+  the lost lines, not shown"; a longer one is a WARN (`stopped_early`).
+- In 9D-a the log ends 1.099 s before 6boot's 60 s, so the two heartbeats at 59.40 and 59.90 s are missing. That
+  is consistent with this. It is not proven by it.
+- Failed writes and fsyncs are now counted and logged (`e` lines). No fsync was added, and nothing else in the I/O
+  changed.
+- `nvme_apple.flush_interval=0` on a trial's command line would make every fsync reach the drive. That needs a new
+  trial image, so it is not done here.
+
+**The telemetry against the command line.**
+- Without `x6e3.hbwdt=1`, "wdt off" or no wdt header at all (a heartbeat from before the read, as 9D-a) is expected.
+- With it, "wdt none" (asked for, not available) is a FAIL.
+- A header that contradicts the command line, or reads under a header that says there are none, is a FAIL.
+- `--expect-feed` is a separate claim.
+
+**What CUR did between two reads.** The classes are:
+- count (as its clock adds);
+- zeroed (it went down, to what a write of 0 between the reads explains);
+- possible_zeroing (it went up, but less than its clock adds, and a write of 0 explains it as well as a stop
+  does). This is kept apart from zeroings and is a WARN;
+- wrap (past 2^32);
+- stalled;
+- slow;
+- fast;
+- lowered.
+
+Who wrote a 0 is not in the log.
+
+**Uncertainty.** Every time computed from CUR comes with an *estimated* uncertainty and its basis:
+- from the clock fit (the rate's spread, the largest residual, half the read), assuming the watchdog clock runs
+  linearly against the counter over the whole log;
+- or, with too few reads to fit, "NOT measured": the nominal 24 MHz within `--wdt-tol`.
+
+It is not a guarantee. 6boot's own prediction (armed + N s) has no uncertainty estimate: it assumes exactly
+24 MHz. If the reads do not advance, nothing is fitted or predicted, and the result is a clean FAIL. An error
+inside the checker is a FAIL too.
 
 **The chain, and the evidence for each link** (the check prints this for every log):
 
 | link | independent evidence | what it does not show |
 |---|---|---|
 | 1 6boot armed WD1 | 6boot's own `xboot,watchdog` in `/chosen` (armed, at cntpct A) | that the arming took effect before Linux |
-| 2 Linux took it over | initcall_debug's probe record of the watchdog (time on the counter via the marks); header: `/dev/watchdog0`, driver registered; with the read: the first BITE = 30 s x 24 MHz (the driver's set_timeout) instead of 6boot's 60 s | the exact moment R of the takeover (only the probe record's time) |
+| 2 Linux took it over | the probe record of the watchdog (initcall_debug) in the heartbeat's kernel log copy and in the trial's survey `dmesg.txt`; the survey's `iomem.txt` (the region claimed); header: driver registered; with the read: the first BITE = 30 s x 24 MHz (set_timeout) instead of 6boot's 60 s | the exact moment of the takeover (only the probe record's time) |
 | 3 user space did not open it | the `w` lines (every 0.5 s); the journal's "did not stop" count (check script) | an open shorter than 0.5 s |
-| 4 the kernel fed it | with the read: zeroings of CUR, each on the counter with an error bound, and their spacing (15 s in the source model) | who wrote the 0 (any write of 0, or of a small value, looks the same) |
+| 4 the kernel fed it | with the read: zeroings of CUR, each on the counter with an estimated uncertainty, their spacing (15 s in the source model); possible zeroings apart | who wrote the 0 |
 | 5 feeds stopped | with the read: the last zeroing, then reads with CUR only counting up | — |
-| 6 the heartbeat stopped | the last `t` line on disk: the reset, if any, came after it | the reset itself |
-| 7 reset (PREDICTED) | from the last read: when CUR would reach BITE, with an error bound | anything: it is a prediction |
-| 8 the reset happened, 6boot fell back | the next boot: 6boot's report (path=known, trial-failed, record seq) through `esp-check`; the next boot's wall clock, which `--next-boot-realtime` compares with the prediction | the reset time (the next boot only bounds it from above, coarsely) |
+| 6 the heartbeat stopped | the last line on disk: alive then; later lines may have been lost (delayed flush) | when it stopped; the reset |
+| 7 reset (PREDICTED) | from the last read (or, with no driver, from 6boot's arming) | anything: it is a prediction |
+| 8 the reset happened, 6boot fell back | 6boot's next-boot report (path=known, trial-failed, record seq) through `esp-check`; the next survey folder (a different boot, its seq after the trial's; its RTC line) | the reset time |
 
-**Clocks.**
-- The counter (CNTVCT, 1 GHz on the M4) is the reference.
-- CLOCK_BOOTTIME must keep to it within 1 ms (FAIL otherwise).
-- CLOCK_REALTIME is used only between its steps. The 9D-a log has one: +17.945 s between BOOTTIME 35.918 and
-  36.419 s, cause unknown, now flagged as a WARN.
-- The watchdog clock is fitted on the counter over stretches without a zeroing. Its rate, spread and largest
-  residual bound every time computed from CUR.
+**Across boots.** x6e3-survey (in the R5 initramfs, `/x6e3/x6e3-survey`) writes
+`/var/lib/x6e3/survey/<k>/<seq>-<tag>-<boot id>/` about 20 s into every boot: `cmdline.txt`, `dmesg.txt`,
+`iomem.txt`, `findmnt`.
+- `--trial-survey` must be the log's boot with the log's command line.
+- Its files' times say when the survey finished: a sign of life, not the boot's start.
+- `--next-survey` gives the next kernel's start on the wall clock from its RTC line ("setting system clock to ...
+  (EPOCH)", which R5 prints when the RTC module registers, `drivers/rtc/class.c:433-436`; whole seconds, so ±0.5 s).
+  That is the earliest reliable record of that boot, and `--next-boot-realtime` overrides it.
+- The window between the last heartbeat and the next kernel is checked against the prediction with an uncertainty
+  of every wall clock step in the trial plus 1 s. The two boots' wall clocks need not share a basis: 9D-a's clock
+  jumped 17.945 s, and R5 writes the system time back to the RTC (`RTC_SYSTOHC`).
+- The R5 kernel (Image.gz 5ba9b133) is unchanged; nothing was added to `apple_wdt`.
 
-**Tests** (build VM: Fedora aarch64, gcc 16.2.1):
-- `make -C tests/watchdog test`, three times in a row and once as root: the 13 unit tests on written logs, the fake
-  watchdog run and 10 fake scenarios:
-  - feeds, takeover, ctrl, wrap, stall, lowered, fast, pastbite;
-  - gap (SIGSTOP 0.8–2.6 s);
-  - off (no `x6e3.hbwdt=1`).
-- The 9D-a log (fixture, sha256 as below) checks as before: 1.475 / 3.348 / 58.901 s.
+**Tests** (build VM: Fedora aarch64, gcc 16.2.1; host: macOS Python 3):
+- `make -C tests/watchdog test`, three times in a row and once as root, after the VM's clock had settled:
+  - 25 unit tests on written logs:
+    - the 9D-a fixture;
+    - a 9D-b-like log;
+    - the telemetry/command-line matrix;
+    - possible zeroing;
+    - reads that do not advance;
+    - a malformed line against a torn tail;
+    - failed writes;
+    - the checker failing;
+    - the survey folders and the reset window;
+  - the fake watchdog run;
+  - 11 fake scenarios: feeds, takeover, ctrl, wrap, stall, lowered, fast, pastbite, gap, off, and unavailable,
+    where the read is asked for with no node and must FAIL.
 - `gcc -fanalyzer` is clean.
-- Two things the tests taught:
-  - Across a gap, a write of 0 cannot be told from CUR having stopped. The check says "slow" and names both
-    explanations.
-  - A write of a lower value shortly before a read can look like a write of 0. Only a drop larger than the read
-    interval is "lowered".
-- The first VM run, just after the VM booted, failed `cntfrq` and `boottime` in two scenarios. chronyd was setting
-  the clock; the reruns passed. The check is meant to catch exactly that.
+- Things the tests taught:
+  - Across a gap, a write of 0 cannot be told from CUR having stopped.
+  - A write of a lower value shortly before a read can look like a write of 0.
+  - The first VM run right after boot failed `cntfrq` and `boottime` while chronyd set the clock.
+
+**Not shown, and assumed nowhere:**
+1. that a user-space read of WD1 is harmless on the J713;
+2. that the watchdog bites when the fabric is hung;
+3. whether CUR wraps or stops at 2^32 (the check tells the two apart);
+4. who wrote each 0;
+5. CNTVOFF = 0 (source only);
+6. that the watchdog clock is exactly 24 MHz (DT; measured only if the read is on);
+7. the cause of 9D-a's wall clock step, and whether the next boot's RTC shares the trial's basis;
+8. that the Apple ARM cores follow the architecture's ordering for these barriers;
+9. how much the drive loses at a reset (the delayed flush makes up to about 1 s possible, not certain);
+10. the fake watchdog models the registers as the driver's source describes them, not as the hardware behaves.
 
 ## Not yet run on the machine
 

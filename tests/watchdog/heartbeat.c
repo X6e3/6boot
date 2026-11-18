@@ -10,8 +10,9 @@
  * /chosen). Linux at EL2 clears CNTVOFF_EL2 (arch/arm64/include/asm/el2_setup.h), so the two are the
  * same count. Its rate is CNTFRQ_EL0, which the header logs: 1 GHz on the J713's M4 (24 MHz in the
  * build VM), not the watchdog's 24 MHz. The header also says where CLOCK_BOOTTIME 0 falls on the
- * counter. The last line of a boot that a reset ends is the last heartbeat that reached the disk; the
- * reset came after it. A boot that is shut down ends with "stopped".
+ * counter. The last line of a boot that a reset ends is the last heartbeat that reached the disk: the
+ * heartbeat was alive then and the reset came after it; lines written after it may have been lost (see
+ * put()). A boot that is shut down ends with "stopped".
  *
  * Who has the watchdog open: every half second it looks through every process's open files (/proc/<pid>/fd)
  * for a path starting with /dev/watchdog, and logs what it finds at the start and whenever it changes:
@@ -44,6 +45,8 @@
  * heartbeat line before each read is on disk first, so a log that ends between a t line and its d line
  * says the read may not have returned.
  *
+ * Failed writes and fsyncs show as e lines (see put()).
+ *
  *   heartbeat [DIR [WATCHDOG_PATH_PREFIX [DT_SOC_DIR [MEM_PATH [CMDLINE_PATH]]]]]
  *
  * (the prefix, /dev/watchdog by default, the device tree directory, /proc/device-tree/soc, the memory
@@ -74,6 +77,32 @@ static unsigned long long cntvct(void)
 {
     unsigned long long v;
     __asm__ volatile("isb; mrs %0, cntvct_el0" : "=r"(v));
+    return v;
+}
+
+/*
+ * The counter around the register reads, so that [before, after] holds the moment the reads were done. The
+ * architecture lets a counter read be done out of order with memory accesses, so on their own two counter
+ * reads do not bracket the loads between them:
+ *  - before: isb, the counter, then a load whose address depends on the value read (Linux's
+ *    arch_counter_enforce_ordering, arch/arm64/include/asm/barrier.h) and dmb ld, so no later load is done
+ *    before the counter was read;
+ *  - after: dsb ld waits until every earlier load has completed, and isb keeps the counter read from being
+ *    done before that.
+ * These order the measurement. They do not make reading the watchdog's registers safe.
+ */
+static unsigned long long cntvct_before_loads(void)
+{
+    unsigned long long v, tmp;
+    __asm__ volatile("isb\n\tmrs %0, cntvct_el0" : "=r"(v) : : "memory");
+    __asm__ volatile("eor %0, %1, %1\n\tadd %0, sp, %0\n\tldr xzr, [%0]\n\tdmb ld" : "=&r"(tmp) : "r"(v) : "memory");
+    return v;
+}
+
+static unsigned long long cntvct_after_loads(void)
+{
+    unsigned long long v;
+    __asm__ volatile("dsb ld\n\tisb\n\tmrs %0, cntvct_el0" : "=r"(v) : : "memory");
     return v;
 }
 
@@ -115,6 +144,20 @@ static void slurp(const char *path, char *out, size_t cap)
 }
 
 /* write without fsync; put() also fsyncs */
+/*
+ * Writes and fsyncs that fail are counted, and a line "e <CNTVCT_EL0> write_errors=N fsync_errors=N errno=E"
+ * goes out (one more write) when the counts change; nothing else is added to the I/O.
+ *
+ * What a line on disk means. put() writes a line and fsyncs it before the heartbeat goes on (before the
+ * register read, for a t line). A line found in the file afterwards was written then. The converse does not
+ * hold: on R5 the Apple NVMe driver completes a flush that comes within 1 s of the previous one without
+ * sending it to the drive (drivers/nvme/host/apple.c, apple_nvme_delayed_flush, flush_interval 1000 ms), so
+ * fsync can return while the line is still in the drive's cache, and a reset can lose about the last second
+ * of lines that fsync reported done. The last line on disk is when the heartbeat was alive, not when it stopped.
+ */
+static unsigned long werrs, ferrs;
+static int lasterr;
+
 static void emit(int fd, const char *s)
 {
     size_t n = strlen(s);
@@ -123,6 +166,8 @@ static void emit(int fd, const char *s)
         if (w < 0) {
             if (errno == EINTR)
                 continue;
+            werrs++;
+            lasterr = errno;
             return;
         }
         s += w;
@@ -133,7 +178,10 @@ static void emit(int fd, const char *s)
 static void put(int fd, const char *s)
 {
     emit(fd, s);
-    fsync(fd);
+    if (fsync(fd)) {
+        ferrs++;
+        lasterr = errno;
+    }
 }
 
 /* append to out[cap] at *n, never past the end */
@@ -445,17 +493,25 @@ int main(int argc, char **argv)
         kmsg_mark(kmsg, fd, 0);
     }
 
+    unsigned long seen_w = 0, seen_f = 0;
     for (unsigned long tick = 0; !stop; tick++) {
         struct timespec r;
+        if (werrs != seen_w || ferrs != seen_f) {
+            seen_w = werrs;
+            seen_f = ferrs;
+            snprintf(line, sizeof(line), "e %llu write_errors=%lu fsync_errors=%lu errno=%d\n", cntvct(), seen_w,
+                     seen_f, lasterr);
+            put(fd, line);
+        }
         unsigned long long cv = cntvct();
         long long bt = ns(CLOCK_BOOTTIME);
         clock_gettime(CLOCK_REALTIME, &r);
         snprintf(line, sizeof(line), "t %llu %lld %lld.%09ld\n", cv, bt, (long long)r.tv_sec, r.tv_nsec);
         put(fd, line);
         if (wdt) {
-            unsigned long long d1 = cntvct();
+            unsigned long long d1 = cntvct_before_loads();
             uint32_t cur = wdt[WD1_CUR / 4], bite = wdt[WD1_BITE / 4], ctrl = wdt[WD1_CTRL / 4];
-            unsigned long long d2 = cntvct();
+            unsigned long long d2 = cntvct_after_loads();
             snprintf(line, sizeof(line), "d %llu %llu %u %u %x\n", d1, d2, cur, bite, ctrl);
             put(fd, line);
         }
