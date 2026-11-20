@@ -107,7 +107,7 @@ trial 1.44 s after the arming, before Linux.
 - Stage 2 `6boot-p32-user-l2w-j713`; heartbeat v3, without the register read.
 - Prepared on 17 November (session folder `oturum9db`, whose 17 files matched their SHA-256 on 18 November before
   the run).
-- Run by Can on 18 November, about 08:18–08:26 +03.
+- I ran it on 18 November, about 08:18–08:26 +03.
 
 **Boot 1:**
 - 6boot chose the trial and spent its try (`wrote=1 err=0`, block 58210733, `us=908087`).
@@ -158,10 +158,10 @@ trial 1.44 s after the arming, before Linux.
   files say 08:24:42 on that basis, while the trial's last heartbeat says 08:25:10 on the synced basis. Wall clocks
   from before a boot's sync cannot be compared across boots.
 
-**Deviation from the runbook (told by Can on 18 November, after the run).** The runbook said to touch nothing
-during boot 1. Out of habit, Can opened KRDC and connected as soon as the desktop came up (within about two
-seconds, in his account), then opened a terminal.
-In his account he typed no command and mounted nothing; this is not checked against the boot's journal or shell
+**Deviation from the runbook (my account, written after the run on 18 November).** The runbook said to touch
+nothing during boot 1. Out of habit, I opened KRDC and connected as soon as the desktop came up (within about two
+seconds, as I recall), then opened a terminal.
+I typed no command and mounted nothing; this is my account, not checked against the boot's journal or shell
 history. What the records say about it:
 - **Nobody opened `/dev/watchdog`.** The heartbeat checks every 0.5 s and logs a `w` line on every change; there is
   one line, "none", and it never changed. The journal has no "did not stop", which an open without magic close
@@ -182,11 +182,11 @@ the question.
 - the moment of the reset;
 - what reset the machine (a watchdog bite is the only cause consistent with every record, but no record says so);
 - what the disk lost;
-- that KRDC and the terminal did nothing else (Can's account only).
+- that KRDC and the terminal did nothing else (my account only).
 
 ### The same trial again, nothing touched (18 November, about 08:56–09:00 +03)
 
-Can ran the same package again so that the deviation above would not be the only record.
+I ran the same package again so that the deviation above would not be the only record.
 - **Boot 1:**
   - 6boot spent the try (`wrote=1 err=0`, block 58215909) and armed for 60 s at A = 12128020514.
   - `apple_wdt` probed at A + 1.829 s. The record is in the heartbeat's kernel log copy and in survey
@@ -194,7 +194,7 @@ Can ran the same package again so that the deviation above would not be the only
   - Nobody opened `/dev/watchdog` (234 checks), and there is no "did not stop".
   - The last heartbeat on disk is at **A + 121.731 s = R + 119.902 s**.
   - The journal has the automatic login (sddm autologin, Plasma) and no KRDC. KRDC may not write to the journal,
-    so this is consistent with Can's account and does not prove it.
+    so this is consistent with my account and does not prove it.
 - **Boot 2:** `path = known`, `trial = trial-failed`, `write=0`; the record shows try 0/1, seq 5; `esp-check`
   says `reason=trial-failed`; survey 323 follows the trial's 322.
 - **Against the source model's reset at R + 120 s:** the last line is 0.098 s before it, against 1.296 s in the
@@ -374,7 +374,6 @@ inside the checker is a FAIL too.
 - A user space that opens `/dev/watchdog`, and a kernel that hangs or panics after taking the watchdog over.
 - A write that fails, is lost, is torn or is not flushed: only on the host (`esp_fixture_test.py`).
 - A trial that is marked good (promote) and the record set back to idle from Linux.
-- Recovery from REL3.
 
 ## Reports
 
@@ -400,7 +399,7 @@ ead088c8d5460c41995c3c686bd3a0461097a286878caf287c4a1c5325c21876  rapor-9da-kont
 
 The first 9D-a check report is the one with the 24 MHz mistake; the second is after the fix.
 
-9D-b (18 November), session folder `oturum9db`; the evidence copied by Can into `kanit-9db/` with its own sums
+9D-b (18 November), session folder `oturum9db`; the evidence I copied into `kanit-9db/` with its own sums
 (`SHA256SUMS-9DB.txt`, 35 files, all matching on the Mac):
 
 The first run:
